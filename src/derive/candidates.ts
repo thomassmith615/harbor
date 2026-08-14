@@ -48,7 +48,7 @@ import { itemsOf, NON_EVENT_KINDS, nodeKey } from "../store/nodes.js";
 import type { DB } from "../kernel/db.js";
 import type { GraphNode, NodeRef, NodeResolver } from "../store/nodes.js";
 import type { TermIndex } from "./terms.js";
-import type { TemplateIndex } from "./templates.js";
+import type { NoiseIndex } from "./noise.js";
 
 export interface Candidate {
   readonly node: GraphNode;
@@ -114,8 +114,8 @@ function add(collector: Collector, node: GraphNode | null, via: string): void {
 export interface CandidateContext {
   readonly resolver: NodeResolver;
   readonly terms: TermIndex;
-  /** Recurring notifications, which are not endpoints. */
-  readonly templates: TemplateIndex;
+  /** Mail that is not something that happened. */
+  readonly noise: NoiseIndex;
   /** The entity that is the user. Sharing only this one means nothing. */
   readonly selfEntityId: string | null;
 }
@@ -136,7 +136,7 @@ function lift(
   // A recurring notification is not something that happened, so it is neither a
   // subject nor a candidate. Filtered on the way in rather than judged by a
   // linker, because every linker would have to know about it otherwise.
-  if (context.templates.has(itemId)) {
+  if (context.noise.isTemplate(itemId)) {
     return null;
   }
 
@@ -381,6 +381,17 @@ function contentCandidates(
   context: CandidateContext,
   collector: Collector,
 ): void {
+  // Broadcast mail is not about anything, so shared vocabulary between two
+  // pieces of it means only that one industry writes the same way. Excluded on
+  // both sides and here rather than in the linker, because generating hundreds
+  // of candidates and then rejecting each one is the expensive way to say no.
+  if (subject.ref.kind === "item" && context.noise.isBroadcast(subject.ref.id)) {
+    collector.notes.push(
+      "this is one-way mail, so it is not linked to anything by shared words",
+    );
+    return;
+  }
+
   const terms = context.terms.distinctive(subject.text);
 
   if (terms.length === 0) {
@@ -420,6 +431,10 @@ function contentCandidates(
     };
 
     for (const row of inItems.all(bind) as { id: string; stream_id: string }[]) {
+      if (context.noise.isBroadcast(row.id)) {
+        continue;
+      }
+
       add(collector, lift(context, row.id, row.stream_id, subject), `word:${term}`);
     }
 

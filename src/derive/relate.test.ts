@@ -211,8 +211,45 @@ describe("the failures from the first real run", () => {
     // ceiling scaled to 500. On a 40,000-item store that meant a word
     // appearing 19 times needed a partner word, and "wildwood" got rejected.
     assert.equal(soloCeilingFor(5), 3, "a tiny store should still have a floor of 3");
-    assert.equal(soloCeilingFor(500), 25, "a large store should let a rarer word stand alone");
-    assert.ok(soloCeilingFor(400) > 3, "the bar never went back to being a constant");
+    assert.equal(soloCeilingFor(120), 20, "a large store should let a rarer word stand alone");
+    assert.ok(soloCeilingFor(60) > 3, "the bar never went back to being a constant");
+  });
+
+  test("one-way mail is not linked by a shared word", () => {
+    // Two recruiter blasts with different subjects, so template detection
+    // cannot see them, sharing "devops" and "marlborough". On the real run this
+    // class of mail produced 91% of every edge in the store.
+    const first: NodeRef = { kind: "item", id: itemFor("mail-recruiter-1") };
+    const second: NodeRef = { kind: "item", id: itemFor("mail-recruiter-2") };
+
+    assert.equal(
+      connected(first, second),
+      false,
+      "two recruiter emails were linked because they use the same industry words",
+    );
+
+    // And it does not get dragged into a real conversation either.
+    const chat = episodeFor("msg-recruiter-chat");
+
+    assert.equal(
+      connected(chat, first),
+      false,
+      "a recruiter blast was linked into a conversation about it",
+    );
+  });
+
+  test("one-way mail can still be linked by a reference or a reminder", () => {
+    // The exclusion is narrow on purpose. A booking confirmation is one-way
+    // mail and its confirmation code is real evidence; a dentist appointment
+    // notice is one-way mail and the reminder covering it is exactly the
+    // cross-source connection Harbor exists for.
+    const booking: NodeRef = { kind: "item", id: itemFor("mail-booking") };
+    const flight: NodeRef = { kind: "item", id: itemFor("mail-flight") };
+    const task: NodeRef = { kind: "item", id: itemFor("task-dentist") };
+    const dentist: NodeRef = { kind: "item", id: itemFor("mail-dentist") };
+
+    assert.equal(edgeBetween(booking, flight), "shares_reference");
+    assert.ok(connected(task, dentist), "a reminder lost its connection to the mail it covers");
   });
 
   test("a hostname is not a distinctive word", () => {

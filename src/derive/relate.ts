@@ -28,7 +28,7 @@ import { LINKERS, RELATIONSHIP_VERSION } from "./linkers.js";
 import { candidatesFor } from "./candidates.js";
 import { indexReferences, REFERENCE_VERSION } from "./references.js";
 import { TermIndex } from "./terms.js";
-import { TemplateIndex } from "./templates.js";
+import { NoiseIndex } from "./noise.js";
 import {
   countEdges,
   countPendingRelationships,
@@ -189,15 +189,22 @@ export function relate(db: DB, options: RelateOptions): RelateReport {
     );
   }
 
-  const templates = new TemplateIndex(db);
-  const retired = dismissItems(db, templates.ids, RELATIONSHIP_VERSION);
-  const templateReport = templates.report();
+  const noise = new NoiseIndex(db);
+  dismissItems(db, noise.templateIds, RELATIONSHIP_VERSION);
+  const noiseReport = noise.report();
 
-  if (templateReport.items > 0) {
+  if (noiseReport.templateItems > 0) {
     options.onNote?.(
-      `${String(templateReport.items)} items across ${String(templateReport.shapes)} recurring ` +
-        `notification shapes are templates rather than events` +
-        (retired > 0 ? `, ${String(retired)} retired from the queue` : ""),
+      `${String(noiseReport.templateItems)} items across ` +
+        `${String(noiseReport.templateShapes)} recurring shapes are templates, not events`,
+    );
+  }
+
+  if (noiseReport.broadcastItems > 0) {
+    options.onNote?.(
+      `${String(noiseReport.broadcastItems)} items from ` +
+        `${String(noiseReport.broadcastSenders)} senders you have never written to are ` +
+        "one-way mail, linkable by reference or reminder but never by a shared word",
     );
   }
 
@@ -254,7 +261,7 @@ export function relate(db: DB, options: RelateOptions): RelateReport {
           continue;
         }
 
-        const set = candidatesFor(db, subject, { resolver, terms, templates, selfEntityId });
+        const set = candidatesFor(db, subject, { resolver, terms, noise, selfEntityId });
         considered += set.candidates.length;
 
         for (const candidate of set.candidates) {
@@ -355,7 +362,7 @@ export function explain(
   const self = selfEntity(db);
   const selfEntityId = self === null ? null : self.id;
   const terms = new TermIndex(db);
-  const templates = new TemplateIndex(db);
+  const noise = new NoiseIndex(db);
 
   const context: LinkerContext = {
     principalId,
@@ -365,7 +372,7 @@ export function explain(
     entitiesOf: entityCache(db, selfEntityId),
   };
 
-  const set = candidatesFor(db, subject, { resolver, terms, templates, selfEntityId });
+  const set = candidatesFor(db, subject, { resolver, terms, noise, selfEntityId });
 
   const people = [...entitiesOfNode(db, ref)].map((entityId) => {
     const row = db.prepare(`SELECT display_name AS name FROM entities WHERE id = ?`).get(entityId) as

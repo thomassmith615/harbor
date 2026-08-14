@@ -46,6 +46,10 @@ const STOPWORDS = new Set([
   "these", "they", "this", "those", "through", "too", "under", "until", "very", "was",
   "way", "well", "were", "what", "when", "where", "which", "while", "who", "whom", "why",
   "will", "with", "would", "you", "your", "yours", "yourself",
+  "seems", "seem", "still", "back", "even", "ever", "every", "another", "around",
+  "since", "though", "thing", "things", "something", "anything", "nothing",
+  "really", "actually", "maybe", "probably", "already", "instead", "rather",
+  "little", "long", "next", "last", "first", "right", "left", "over", "under",
   // Message furniture. Present in enormous volume and never the reason two
   // things are related.
   "thanks", "thank", "please", "sent", "sorry", "hey", "hello", "regards", "best",
@@ -141,7 +145,7 @@ export function contentTerms(text: string): readonly string[] {
  * partner word for anything appearing between 4 and 500 times.
  */
 export function soloCeilingFor(rarityCeiling: number): number {
-  return Math.max(3, Math.round(rarityCeiling / 20));
+  return Math.max(3, Math.round(rarityCeiling / 6));
 }
 
 export class TermIndex {
@@ -169,11 +173,17 @@ export class TermIndex {
 
     this.corpus = Math.max(1, items + episodes);
 
-    // Two percent of the store, floored at 5 so a nearly empty store still has
-    // usable terms, capped at 500 so a large one does not start treating a
-    // moderately common word as evidence. The floor is what makes this work on
-    // a fresh install and in tests; the cap is what makes it work at scale.
-    this.ceiling = Math.min(500, Math.max(5, Math.round(this.corpus * 0.02)));
+    // Half a percent, capped at 120.
+    //
+    // Two percent was the first guess and it was far too loose. On a real store
+    // of 7,163 documents it made anything under 143 appearances "distinctive",
+    // which is how `seems`, `native`, and `martin` ended up as evidence and how
+    // 91% of the graph came from one weak linker. A word that appears in one
+    // document in two hundred is unusual; one in fifty is just vocabulary.
+    //
+    // The floor of 5 is what makes a nearly empty store and the test fixtures
+    // work at all, and it is the only part of this that is arbitrary.
+    this.ceiling = Math.min(120, Math.max(5, Math.round(this.corpus * 0.005)));
   }
 
   get corpusSize(): number {

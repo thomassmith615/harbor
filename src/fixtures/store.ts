@@ -315,6 +315,47 @@ const SEEDS: readonly Seed[] = [
     at: NOW - (60 - index * 7) * DAY,
   })),
 
+  // ---- broadcast: two recruiter blasts that share a word and must not link ----
+  //
+  // Each has a different subject, so template detection cannot see them. What
+  // they have in common is that nobody ever replied to the sender.
+  {
+    stream: "imap",
+    externalId: "mail-recruiter-1",
+    kind: "message",
+    direction: "inbound",
+    threadId: "thread-recruiter-1",
+    title: "Exciting DevOps Engineer opportunity",
+    body: "I came across your profile and thought of this devops role in Marlborough.",
+    author: "inmail-hit-reply@linkedin.test",
+    participants: ["me@comcast.net"],
+    at: NOW - 30 * DAY,
+  },
+  {
+    stream: "imap",
+    externalId: "mail-recruiter-2",
+    kind: "message",
+    direction: "inbound",
+    threadId: "thread-recruiter-2",
+    title: "Senior devops role, Marlborough",
+    body: "Another devops opening in Marlborough you may find interesting.",
+    author: "inmail-hit-reply@linkedin.test",
+    participants: ["me@comcast.net"],
+    at: NOW - 25 * DAY,
+  },
+  {
+    stream: "imessage",
+    externalId: "msg-recruiter-chat",
+    kind: "message",
+    direction: "inbound",
+    threadId: "chat-work",
+    title: "+15551230013",
+    body: "did you ever hear back about that devops thing in Marlborough",
+    author: "+15551230013",
+    participants: ["+15551230013"],
+    at: NOW - 24 * DAY,
+  },
+
   // ---- noise: must not connect to anything ----
   {
     stream: "imap",
