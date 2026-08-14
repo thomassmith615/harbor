@@ -1,0 +1,39 @@
+{
+  "name": "harbor",
+  "version": "0.31.0",
+  "description": "Local-first personal intelligence appliance. Messages, mail, calendars, and reminders, connected and reasoned over on your own machine.",
+  "type": "module",
+  "private": true,
+  "license": "MIT",
+  "engines": {
+    "node": ">=20.11"
+  },
+  "bin": {
+    "harbor": "./dist/cli/main.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "start": "node dist/cli/main.js",
+    "clean": "node -e \"fs.rmSync('dist',{recursive:true,force:true})\"",
+    "verify": "npm run typecheck && npm run build && node --test \"dist/**/*.test.js\"",
+    "derive": "node dist/cli/main.js derive",
+    "test": "npm run build && node --test \"dist/**/*.test.js\""
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.2.0",
+    "commander": "^14.0.0",
+    "imapflow": "^1.6.6",
+    "mailparser": "^3.9.15",
+    "sqlite-vec": "^0.1.7-alpha.2"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/mailparser": "^3.4.6",
+    "@types/node": "^22.15.3",
+    "typescript": "^5.8.3"
+  },
+  "optionalDependencies": {
+    "pdf-parse": "^1.1.1"
+  }
+}
