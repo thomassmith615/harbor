@@ -12,6 +12,7 @@ import {
   encryptStore,
   isEncrypted,
   keychainKeyOpensStore,
+  repairKeychain,
   storeKeyCandidates,
   storeKeyWithSource,
 } from "../kernel/encryption.js";
@@ -47,6 +48,7 @@ import * as nodePath from "node:path";
 import * as nodeUrl from "node:url";
 import { backup, encryptedBackup, restoreBackup } from "../kernel/backup.js";
 import { doctor } from "../surfaces/doctor.js";
+import { preflight } from "../surfaces/preflight.js";
 import { proposeFacts, factCandidates } from "../derive/facts.js";
 import {
   countFacts,
@@ -3199,6 +3201,31 @@ async function main(): Promise<number> {
     });
 
   dev
+    .command("preflight")
+    .description("Whether this installation is wired up correctly, as opposed to healthy")
+    .action(async () => {
+      const report = await preflight();
+
+      for (const check of report.checks) {
+        const mark = check.state === "ok" ? "[ok] " : check.state === "warn" ? "[~]  " : "[!]  ";
+
+        logger.print(`${mark} ${check.area.padEnd(34)} ${check.detail}`);
+
+        if (check.fix !== null) {
+          logger.print(`${" ".repeat(40)} -> ${check.fix}`);
+        }
+      }
+
+      logger.print("");
+      logger.print(
+        report.problems === 0 && report.warnings === 0
+          ? "Wired up correctly."
+          : `${plural(report.problems, "problem", "problems")}, ` +
+              `${plural(report.warnings, "warning", "warnings")}.`,
+      );
+    });
+
+  dev
     .command("install-service")
     .description("Write a launchd plist or systemd unit for the daemon")
     .option("--port <port>", "HTTP port", "8484")
@@ -4045,9 +4072,27 @@ async function main(): Promise<number> {
     .command("encryption")
     .option("--enable", "encrypt the store in place, once")
     .option("--show-key", "print the key so it can be written down")
+    .option("--repair-keychain <key>", "put a working key back, removing every stale entry")
     .description("Whether the store itself is encrypted on disk")
-    .action(async (options: { enable?: boolean; showKey?: boolean }) => {
+    .action(async (options: { enable?: boolean; showKey?: boolean; repairKeychain?: string }) => {
       const encrypted = await isEncrypted();
+
+      if (options.repairKeychain !== undefined) {
+        const result = await repairKeychain(options.repairKeychain.trim());
+
+        if (result.removed > 0) {
+          logger.print(`Removed ${plural(result.removed, "stale entry", "stale entries")}.`);
+        }
+
+        if (!result.ok) {
+          logger.warn(result.detail);
+          return;
+        }
+
+        logger.print(result.detail);
+        logger.print("Anything that runs without your shell, including the daemon, can start now.");
+        return;
+      }
 
       if (options.enable === true) {
         if (encrypted) {

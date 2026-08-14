@@ -77,25 +77,38 @@ function htmlToText(html: string): string {
  * should never pay for one. When the module is missing the attachment records
  * that it was skipped, which is visible in `harbor dev attachments` and fixable
  * with one npm install.
+ *
+ * `unpdf`, not `pdf-parse`. The original choice bundles a pdf.js from 2016 and
+ * fails with "bad XRef entry" on any PDF using a cross-reference stream, which
+ * is to say almost every PDF produced in the last decade. It did not throw a
+ * missing-dependency error or crash a sync; it recorded an unreadable
+ * attachment and moved on, so a mailbox full of PDF receipts extracted nothing
+ * and reported nothing wrong. Verified against a real generated receipt before
+ * this was changed: pdf-parse fails, unpdf returns the line items.
  */
 async function pdfToText(content: Buffer): Promise<{ text: string | null; error: string | null }> {
   try {
-    // Specifier built at run time so the type checker does not require the
-    // package to be present. It is an optional dependency by design: Harbor
-    // installs and runs without it, and a mailbox with no PDFs never needs it.
-    const specifier = "pdf-parse";
+    // Built at run time so the type checker does not require the package. It is
+    // optional by design: Harbor installs and runs without it, and a mailbox
+    // with no PDFs never needs it.
+    const specifier = "unpdf";
     const module_ = (await import(specifier)) as unknown as {
-      default: (data: Buffer) => Promise<{ text: string }>;
+      getDocumentProxy: (data: Uint8Array) => Promise<unknown>;
+      extractText: (
+        doc: unknown,
+        options: { mergePages: boolean },
+      ) => Promise<{ text: string }>;
     };
 
-    const parsed = await module_.default(content);
+    const doc = await module_.getDocumentProxy(new Uint8Array(content));
+    const { text } = await module_.extractText(doc, { mergePages: true });
 
-    return { text: parsed.text, error: null };
+    return { text: text.trim().length === 0 ? null : text, error: null };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
 
     if (/cannot find (module|package)/i.test(message)) {
-      return { text: null, error: "pdf-parse not installed (npm install pdf-parse)" };
+      return { text: null, error: "unpdf not installed (npm install unpdf)" };
     }
 
     return { text: null, error: `pdf could not be read: ${message.slice(0, 120)}` };

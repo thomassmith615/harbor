@@ -44,10 +44,10 @@
  * journalling, rekeys, and restores WAL afterwards.
  */
 import { randomBytes } from "node:crypto";
-import { existsSync, renameSync, rmSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, renameSync, rmSync } from "node:fs";
 import { dbPath, harborHome } from "./paths.js";
 import { join } from "node:path";
-import { detectKeychain, readSecret, storeSecret } from "./keychain.js";
+import { deleteSecret, detectKeychain, readSecret, storeSecret } from "./keychain.js";
 import { ConfigurationError } from "./errors.js";
 
 /** The keychain account the store key is filed under. */
@@ -143,8 +143,66 @@ export async function storeKeyCandidates(): Promise<readonly string[]> {
   return found;
 }
 
+/**
+ * Writes the store key, but only if it opens the store.
+ *
+ * A guard rather than a convenience. Something on a real machine replaced this
+ * keychain entry three times with a random key that opened nothing, at the
+ * exact second an ordinary command ran, and no path in this codebase can be
+ * shown to do it: `encryptStore` and `repairKeychain` are the only writers and
+ * neither had run. I could not find the cause, so I removed the possibility.
+ *
+ * A key that does not open the file is never a key worth keeping, whatever
+ * wrote it and for whatever reason, so the check costs one read and closes the
+ * whole class. Every attempt is recorded in `logs/keychain.log` with the
+ * command that made it, so the next occurrence names itself instead of
+ * requiring another morning of forensics.
+ */
 export async function saveKey(key: string): Promise<boolean> {
+  const { keyOpens } = await import("./db.js");
+  const path = dbPath();
+  const encrypted = await isEncrypted(path);
+
+  // Before the store is encrypted there is nothing to test against, so the
+  // only writer that can legitimately be here is the one doing the encrypting.
+  const usable = !encrypted || keyOpens(path, key);
+
+  auditKeyWrite(key, usable);
+
+  if (!usable) {
+    return false;
+  }
+
   return await storeSecret(KEY_ACCOUNT, key);
+}
+
+/**
+ * A line per attempt to write the store key.
+ *
+ * Deliberately outside the database, because the database is the thing that
+ * cannot be opened when this goes wrong. Records the key's first eight
+ * characters rather than the key: enough to tell two apart, useless to anyone
+ * who reads the file.
+ */
+function auditKeyWrite(key: string, accepted: boolean): void {
+  try {
+    const line =
+      [
+        new Date().toISOString(),
+        accepted ? "accepted" : "REFUSED",
+        `${key.slice(0, 8)}...`,
+        `pid=${String(process.pid)}`,
+        process.argv.slice(1).join(" ").slice(0, 120),
+      ].join("  ") + "\n";
+
+    const directory = join(harborHome(), "logs");
+
+    mkdirSync(directory, { recursive: true, mode: 0o700 });
+    appendFileSync(join(directory, "keychain.log"), line, { mode: 0o600 });
+  } catch {
+    // An audit line that cannot be written is not a reason to fail a write the
+    // caller asked for.
+  }
 }
 
 export interface EncryptReport {
@@ -257,4 +315,52 @@ export async function keychainKeyOpensStore(): Promise<boolean> {
   const fromKeychain = await readSecret(KEY_ACCOUNT);
 
   return fromKeychain !== null && keyOpens(dbPath(), fromKeychain);
+}
+
+/**
+ * Puts a working key back in the keychain.
+ *
+ * Exists because recovering from a bad entry took four commands and a
+ * `while` loop, and because `security delete-generic-password` removes one
+ * matching item, so a duplicate can survive and keep answering lookups with a
+ * key that opens nothing.
+ *
+ * Deletes until there is nothing left to delete, writes, reads back, and
+ * verifies the result opens the store. Anything less is how the original
+ * problem was created.
+ */
+export async function repairKeychain(
+  key: string,
+): Promise<{ readonly ok: boolean; readonly removed: number; readonly detail: string }> {
+  const { keyOpens } = await import("./db.js");
+  const path = dbPath();
+
+  if (!keyOpens(path, key)) {
+    return { ok: false, removed: 0, detail: "that key does not open this store" };
+  }
+
+  let removed = 0;
+
+  // Until it fails. One delete removes one item, and the whole failure this
+  // repairs was a second entry nobody knew about.
+  while (await deleteSecret(KEY_ACCOUNT)) {
+    removed += 1;
+
+    if (removed > 20) {
+      break;
+    }
+  }
+
+  const stored = await saveKey(key);
+  const readBack = await readSecret(KEY_ACCOUNT);
+
+  if (!stored || readBack !== key) {
+    return {
+      ok: false,
+      removed,
+      detail: "the keychain did not accept the key",
+    };
+  }
+
+  return { ok: true, removed, detail: "the keychain now holds a key that opens the store" };
 }
