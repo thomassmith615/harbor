@@ -167,6 +167,47 @@ function when(ms: number | null): string {
   return ms === null ? "never" : humanWhen(ms, tz);
 }
 
+/**
+ * How many records a command prints before it stops.
+ *
+ * Every list in here used to be unbounded, which is fine until `harbor people
+ * cards` prints four hundred contacts and pushes the thing you were actually
+ * reading out of the terminal's scrollback. A default ceiling with an honest
+ * footer is strictly better: you can always ask for more, and you cannot
+ * un-lose history.
+ */
+const PAGE = 25;
+
+/**
+ * Trims a list to a page and reports what was left out.
+ *
+ * The footer is not decoration. A truncated list that does not say it was
+ * truncated is a list that quietly lies about what Harbor holds, which is the
+ * one thing these commands exist to tell you.
+ */
+function page<T>(
+  rows: readonly T[],
+  options: { readonly limit?: string | undefined; readonly all?: boolean | undefined },
+): { readonly shown: readonly T[]; readonly footer: string | null } {
+  if (options.all === true) {
+    return { shown: rows, footer: null };
+  }
+
+  const asked = options.limit === undefined ? Number.NaN : Number.parseInt(options.limit, 10);
+  const limit = Number.isFinite(asked) && asked > 0 ? asked : PAGE;
+
+  if (rows.length <= limit) {
+    return { shown: rows, footer: null };
+  }
+
+  return {
+    shown: rows.slice(0, limit),
+    footer:
+      `Showing ${String(limit)} of ${String(rows.length)}. ` +
+      "`-n <count>` for more, `--all` for everything.",
+  };
+}
+
 function plural(count: number, one: string, many: string): string {
   return `${String(count)} ${count === 1 ? one : many}`;
 }
@@ -1720,8 +1761,11 @@ async function main(): Promise<number> {
   program
     .command("why")
     .argument("<id>", "an item id, or an episode id beginning ep_")
+    .option("-n, --limit <count>", "how many candidates to show")
+    .option("--all", "every candidate considered")
+    .option("--linked", "only the ones an edge was actually drawn to")
     .description("Why Harbor connected something to what it did, and what it passed over")
-    .action((id: string) => {
+    .action((id: string, options: { limit?: string; all?: boolean; linked?: boolean }) => {
       const { db } = openDatabase();
 
       try {
@@ -1744,10 +1788,20 @@ async function main(): Promise<number> {
           logger.print(`  note         ${note}`);
         }
 
-        logger.print("");
-        logger.print(`${String(result.candidates.length)} candidates considered`);
+        const considered =
+          options.linked === true
+            ? result.candidates.filter((candidate) => candidate.drawn.length > 0)
+            : result.candidates;
 
-        for (const candidate of result.candidates) {
+        const { shown, footer } = page(considered, options);
+
+        logger.print("");
+        logger.print(
+          `${String(result.candidates.length)} candidates considered, ` +
+            `${String(result.candidates.filter((entry) => entry.drawn.length > 0).length)} linked`,
+        );
+
+        for (const candidate of shown) {
           const cross = candidate.sameStream ? "" : "  [cross-source]";
           logger.print("");
           logger.print(
@@ -1766,6 +1820,11 @@ async function main(): Promise<number> {
           if (candidate.drawn.length === 0 && candidate.rejected.length === 0) {
             logger.print("    no edge  no linker applies to this pair");
           }
+        }
+
+        if (footer !== null) {
+          logger.print("");
+          logger.print(`${footer} \`--linked\` for only what connected.`);
         }
       } finally {
         db.close();
@@ -1834,19 +1893,29 @@ async function main(): Promise<number> {
   people
     .command("cards")
     .argument("[query]", "narrow to cards whose name matches")
+    .option("-n, --limit <count>", "how many to show")
+    .option("--all", "every card, however many that is")
+    .option("--stranded", "only cards with nothing Harbor can anchor to")
     .description("Every contact card and what Harbor could read from it")
-    .action((query: string | undefined) => {
+    .action((query: string | undefined, options: { limit?: string; all?: boolean; stranded?: boolean }) => {
       const { db } = openDatabase();
 
       try {
-        const cards = inspectCards(db, query);
+        const found = inspectCards(db, query);
+
+        const cards =
+          options.stranded === true
+            ? found.filter((card) => card.emails.length + card.phones.length === 0)
+            : found;
 
         if (cards.length === 0) {
           logger.print(query === undefined ? "No contact cards stored." : `No card matching "${query}".`);
           return;
         }
 
-        for (const card of cards) {
+        const { shown, footer } = page(cards, options);
+
+        for (const card of shown) {
           logger.print(`${card.title ?? "(unnamed)"}`);
 
           const identifiers = [...card.emails, ...card.phones];
@@ -1864,13 +1933,18 @@ async function main(): Promise<number> {
           );
         }
 
-        const stranded = cards.filter((card) => card.emails.length + card.phones.length === 0);
+        if (footer !== null) {
+          logger.print("");
+          logger.print(footer);
+        }
 
-        if (stranded.length > 0) {
+        const stranded = found.filter((card) => card.emails.length + card.phones.length === 0);
+
+        if (stranded.length > 0 && options.stranded !== true) {
           logger.print("");
           logger.print(
             `${plural(stranded.length, "card has", "cards have")} nothing Harbor can anchor to. ` +
-              "A name alone cannot identify anyone, so those are skipped.",
+              "A name alone cannot identify anyone, so those are skipped. `--stranded` lists them.",
           );
         }
       } finally {

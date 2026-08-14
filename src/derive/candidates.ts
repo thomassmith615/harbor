@@ -44,10 +44,11 @@
  * above where real data sits rather than tuned tight.
  */
 import { matchesFor, referencesFor } from "../store/references.js";
-import { itemsOf, nodeKey } from "../store/nodes.js";
+import { itemsOf, NON_EVENT_KINDS, nodeKey } from "../store/nodes.js";
 import type { DB } from "../kernel/db.js";
 import type { GraphNode, NodeRef, NodeResolver } from "../store/nodes.js";
 import type { TermIndex } from "./terms.js";
+import type { TemplateIndex } from "./templates.js";
 
 export interface Candidate {
   readonly node: GraphNode;
@@ -113,6 +114,8 @@ function add(collector: Collector, node: GraphNode | null, via: string): void {
 export interface CandidateContext {
   readonly resolver: NodeResolver;
   readonly terms: TermIndex;
+  /** Recurring notifications, which are not endpoints. */
+  readonly templates: TemplateIndex;
   /** The entity that is the user. Sharing only this one means nothing. */
   readonly selfEntityId: string | null;
 }
@@ -130,13 +133,26 @@ function lift(
   streamId: string,
   subject: GraphNode,
 ): GraphNode | null {
+  // A recurring notification is not something that happened, so it is neither a
+  // subject nor a candidate. Filtered on the way in rather than judged by a
+  // linker, because every linker would have to know about it otherwise.
+  if (context.templates.has(itemId)) {
+    return null;
+  }
+
   const ref = context.resolver.canonicalNode(itemId, streamId);
 
   if (ref === null || nodeKey(ref) === nodeKey(subject.ref)) {
     return null;
   }
 
-  return context.resolver.node(ref);
+  const node = context.resolver.node(ref);
+
+  if (node !== null && NON_EVENT_KINDS.includes(node.kind)) {
+    return null;
+  }
+
+  return node;
 }
 
 // ---- generators ----

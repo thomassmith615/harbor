@@ -169,6 +169,22 @@ export function loadNode(db: DB, ref: NodeRef): GraphNode | null {
  */
 export const CONVERSATIONAL_CONNECTORS: readonly string[] = ["imessage"];
 
+/**
+ * Item kinds that are reference data rather than things that happened.
+ *
+ * A contact card is a fact about who someone is. It has an `occurred_at`
+ * because every item does, but that timestamp is when the card was written,
+ * which is not when anything happened. Left in the graph it produced situations
+ * like "Myles Menowitz: a contact card from March, and a payment three days
+ * later, across two sources", which is technically two sources and is not a
+ * situation.
+ *
+ * Contacts still do the most important job in the store: they turn addresses
+ * and phone numbers into people, which is what every other edge depends on.
+ * They are simply not endpoints.
+ */
+export const NON_EVENT_KINDS: readonly string[] = ["contact"];
+
 function conversationalStreams(db: DB): ReadonlySet<string> {
   const placeholders = CONVERSATIONAL_CONNECTORS.map(() => "?").join(", ");
 

@@ -28,6 +28,14 @@ const MIN_CONFIDENCE = 0.45;
  */
 const MAX_NODES = 40;
 
+/**
+ * Kinds that can be the centre of a situation.
+ *
+ * An event is a plan, a task is an obligation, a conversation is an exchange.
+ * A message is a notification until something else gives it a reason to matter.
+ */
+const SPINE_KINDS: readonly string[] = ["event", "task", "conversation"];
+
 interface EdgeRow {
   readonly from_kind: string;
   readonly from_id: string;
@@ -207,6 +215,20 @@ export function buildThreads(db: DB, principalId: string): ThreadReport {
     // One source is a conversation, which the source application already shows
     // better than Harbor would. Two or more is the thing Harbor is for.
     if (sources.size < 2) {
+      continue;
+    }
+
+    // A situation needs a spine.
+    //
+    // Something has to have *happened*: a plan, an obligation, or an exchange.
+    // Without this, any pile of mail that mentions the same rare word is a
+    // situation, and on a real store the top result was twenty Venmo receipts
+    // for the same weekly transaction. Two or more sources made it look like a
+    // discovery; nothing in it was a plan, a commitment, or a conversation.
+    //
+    // Mail is the connective tissue of a situation and rarely its centre. It
+    // still joins one freely; it just cannot be the whole of one.
+    if (!nodes.some((node) => SPINE_KINDS.includes(node.kind))) {
       continue;
     }
 

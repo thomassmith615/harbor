@@ -230,7 +230,7 @@ describe("identity", () => {
 });
 
 describe("the fixture store itself", () => {
-  test("seeds four sources and lands every item", () => {
+  test("seeds five sources and lands every item", () => {
     // A fixture that silently stopped seeding would make every graph test pass
     // by having nothing to link.
     const fresh = openTestStore();
@@ -245,8 +245,8 @@ describe("the fixture store itself", () => {
         fresh.db.prepare(`SELECT COUNT(*) AS n FROM streams`).get() as { n: number }
       ).n;
 
-      assert.equal(streams, 4);
-      assert.ok(items >= 11, `only ${String(items)} fixture items landed`);
+      assert.equal(streams, 5);
+      assert.ok(items >= 20, `only ${String(items)} fixture items landed`);
     } finally {
       fresh.close();
     }

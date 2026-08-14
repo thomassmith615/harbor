@@ -28,6 +28,19 @@
  *
  *   noise     A newsletter and an unrelated chat that must NOT be connected to
  *             anything. Half the value of a fixture is the edges it forbids.
+ *
+ *   venmo     Six identical payment notifications. On the first real run these
+ *             chained into the top-ranked "situation" in the store: twenty
+ *             receipts for one weekly transaction, every statement true and the
+ *             whole thing worthless.
+ *
+ *   card      A contact card plus a payment to that person. Was a two-source
+ *             situation spanning three days, because a card carries a timestamp
+ *             and nothing that happened.
+ *
+ *   shore     One rare word shared between a conversation and a calendar entry,
+ *             appearing often enough that the old solo-word bar of three
+ *             rejected it. This is the shore-town question the product is for.
  */
 import { saveAccount } from "../store/accounts.js";
 import { ensureStream } from "../store/streams.js";
@@ -81,6 +94,7 @@ export function seedFixture(db: DB): Fixture {
     { type: "imap", label: "me@comcast.net", connector: "imap" },
     { type: "apple", label: "icloud-calendar", connector: "apple-calendar" },
     { type: "apple", label: "icloud-reminders", connector: "apple-reminders" },
+    { type: "apple", label: "icloud-contacts", connector: "apple-contacts" },
   ];
 
   for (const source of sources) {
@@ -226,6 +240,80 @@ const SEEDS: readonly Seed[] = [
     participants: ["me@comcast.net"],
     at: NOW - 5 * DAY,
   },
+
+  // ---- shore: one distinctive word, no second word to lean on ----
+  {
+    stream: "imessage",
+    externalId: "msg-shore-1",
+    kind: "message",
+    direction: "inbound",
+    threadId: "chat-shore",
+    title: "+15551230009",
+    body: "we got the Wildwood place again for the last week of August",
+    author: "+15551230009",
+    participants: ["+15551230009"],
+    at: NOW - 20 * DAY,
+  },
+  {
+    stream: "imessage",
+    externalId: "msg-shore-2",
+    kind: "message",
+    direction: "outbound",
+    threadId: "chat-shore",
+    title: "+15551230009",
+    body: "amazing, I will drive down friday",
+    participants: ["+15551230009"],
+    at: NOW - 20 * DAY + HOUR,
+  },
+  {
+    stream: "apple-calendar",
+    externalId: "evt-shore",
+    kind: "event",
+    title: "Wildwood",
+    body: null,
+    participants: [],
+    at: NOW + 5 * DAY,
+    endsAt: NOW + 8 * DAY,
+  },
+
+  // ---- card: reference data, not something that happened ----
+  {
+    stream: "apple-contacts",
+    externalId: "card-myles",
+    kind: "contact",
+    title: "Myles Menowitz",
+    body: "Myles Menowitz +15551230011",
+    participants: ["+15551230011"],
+    at: NOW - 40 * DAY,
+  },
+  {
+    stream: "imap",
+    externalId: "mail-myles",
+    kind: "message",
+    direction: "inbound",
+    threadId: "thread-myles",
+    title: "You paid Myles Menowitz $437.74",
+    body: "You paid Myles Menowitz $437.74. View your transaction in the app.",
+    author: "venmo@venmo.test",
+    participants: ["me@comcast.net"],
+    at: NOW - 37 * DAY,
+  },
+
+  // ---- venmo: a template, not twenty events ----
+  ...Array.from({ length: 6 }, (_, index) => ({
+    stream: "imap",
+    externalId: `mail-venmo-${String(index)}`,
+    kind: "message",
+    direction: "inbound" as const,
+    threadId: `thread-venmo-${String(index)}`,
+    title: `You paid Christopher Hand $${String(10 + index)}.55`,
+    body:
+      `You paid Christopher Hand $${String(10 + index)}.55. ` +
+      "View your transaction in the app.",
+    author: "venmo@venmo.test",
+    participants: ["me@comcast.net"],
+    at: NOW - (60 - index * 7) * DAY,
+  })),
 
   // ---- noise: must not connect to anything ----
   {

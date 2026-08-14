@@ -75,11 +75,29 @@ const SCAN_LIMIT = 1_500;
  * in the text a node hands over, and a title is where the distinguishing words
  * usually are.
  */
+/**
+ * Links, which are not words.
+ *
+ * From a real run: `amazonaws` was being treated as one of the most
+ * distinctive words in the store, because it is in the tracking-pixel URL at
+ * the bottom of thousands of marketing emails, and any two of those "shared a
+ * rare word". A hostname says something about a mail provider's infrastructure
+ * and nothing about what the mail is concerned with.
+ *
+ * This does lose some real signal: a merchant sometimes appears only in a link.
+ * That is the right trade. A merchant that matters is in the sender or the
+ * subject too, and a false edge between two unrelated receipts is worse than a
+ * missing one between two related ones.
+ */
+const LINKS = /\bhttps?:\/\/\S+|\b[\w.-]+\.(?:com|net|org|io|co|us|edu|gov|dev|app|link|email)\b/gi;
+
 export function contentTerms(text: string): readonly string[] {
   const seen = new Set<string>();
   const terms: string[] = [];
 
-  for (const raw of text.slice(0, SCAN_LIMIT).toLowerCase().split(/[^\p{L}\p{N}]+/u)) {
+  const scannable = text.slice(0, SCAN_LIMIT).toLowerCase().replace(LINKS, " ");
+
+  for (const raw of scannable.split(/[^\p{L}\p{N}]+/u)) {
     if (raw.length < MIN_LENGTH || STOPWORDS.has(raw)) {
       continue;
     }
@@ -114,14 +132,38 @@ export function contentTerms(text: string): readonly string[] {
  * soon as the answer is no. On a quarter of a million items that is the
  * difference between a pass that finishes and one that does not.
  */
+/**
+ * The solo-word bar, as a function of the rarity ceiling.
+ *
+ * Pure and exported so the mistake that produced it can be pinned by a test
+ * without building a forty-thousand-document store: the old value was a
+ * hardcoded 3 while the ceiling scaled to 500, which silently required a
+ * partner word for anything appearing between 4 and 500 times.
+ */
+export function soloCeilingFor(rarityCeiling: number): number {
+  return Math.max(3, Math.round(rarityCeiling / 20));
+}
+
 export class TermIndex {
   private readonly cache = new Map<string, number>();
   private readonly ceiling: number;
   private readonly corpus: number;
 
   constructor(private readonly db: DB) {
+    // Conversational messages are excluded from the corpus for the same reason
+    // they are excluded from the graph: an episode stands for them. Counting
+    // both meant an eighty-message thread that said "steak" once per message
+    // counted as eighty-one documents containing "steak", and on a real store
+    // that inflation is what made ordinary words look common and distinctive
+    // words look ordinary.
     const items = (
-      db.prepare(`SELECT COUNT(*) AS n FROM items WHERE deleted_at IS NULL`).get() as { n: number }
+      db
+        .prepare(
+          `SELECT COUNT(*) AS n FROM items i
+           JOIN streams s ON s.id = i.stream_id
+           WHERE i.deleted_at IS NULL AND s.connector_id NOT IN ('imessage')`,
+        )
+        .get() as { n: number }
     ).n;
     const episodes = (db.prepare(`SELECT COUNT(*) AS n FROM episodes`).get() as { n: number }).n;
 
@@ -157,7 +199,12 @@ export class TermIndex {
       this.db
         .prepare(
           `SELECT COUNT(*) AS n FROM (
-             SELECT rowid FROM items_fts WHERE items_fts MATCH ? LIMIT ?
+             SELECT f.item_id FROM items_fts f
+             JOIN items i ON i.id = f.item_id
+             JOIN streams s ON s.id = i.stream_id
+             WHERE items_fts MATCH ? AND i.deleted_at IS NULL
+               AND s.connector_id NOT IN ('imessage')
+             LIMIT ?
            )`,
         )
         .get(match, limit) as { n: number }
@@ -180,6 +227,20 @@ export class TermIndex {
     this.cache.set(term, total);
 
     return total;
+  }
+
+  /**
+   * Rare enough that sharing it alone is evidence, with no second word needed.
+   *
+   * This used to be a hardcoded 3 while the ceiling above scaled to 500, so on
+   * a real store anything between 4 and 500 appearances required a partner
+   * word. "Wildwood" appeared in 19 things out of 40,000 and was rejected,
+   * which is precisely the shore-town question Harbor is supposed to answer.
+   *
+   * A twentieth of the ceiling, floored at 3 so a small store still works.
+   */
+  get soloCeiling(): number {
+    return soloCeilingFor(this.ceiling);
   }
 
   /** Rare enough that two things sharing it are probably about one thing. */

@@ -10,6 +10,7 @@
 import { strict as assert } from "node:assert";
 import { after, before, describe, test } from "node:test";
 import { relate, explain, RELATIONSHIP_VERSION } from "./relate.js";
+import { contentTerms, soloCeilingFor } from "./terms.js";
 import { derive } from "./pipeline.js";
 import { resolveEntities } from "./entities.js";
 import { PRINCIPAL, seedFixture } from "../fixtures/store.js";
@@ -123,6 +124,108 @@ describe("the graph reaches across sources", () => {
       cross > 0,
       `${String(total)} edges and none of them cross a source boundary`,
     );
+  });
+});
+
+describe("the failures from the first real run", () => {
+  test("a distinctive word carries an edge on its own", () => {
+    // "Wildwood" appeared in 19 things out of 40,000 and was rejected, because
+    // the solo-word bar was hardcoded at 3 while the corpus ceiling scaled to
+    // 500. Anything between 4 and 500 needed a partner word it did not have.
+    const conversation = episodeFor("msg-shore-1");
+    const event: NodeRef = { kind: "item", id: itemFor("evt-shore") };
+
+    assert.ok(
+      connected(conversation, event),
+      "the Wildwood conversation is not connected to the Wildwood calendar entry",
+    );
+  });
+
+  test("a contact card is not a situation", () => {
+    // A card carries a timestamp and nothing that happened, so "a contact card
+    // from March and a payment three days later" read as a two-source
+    // discovery.
+    const card: NodeRef = { kind: "item", id: itemFor("card-myles") };
+
+    assert.equal(
+      edgesFor(store.db, card).length,
+      0,
+      "a contact card was linked into the graph",
+    );
+
+    for (const thread of topThreads(store.db, PRINCIPAL, { minSources: 2, limit: 50 })) {
+      for (const ref of threadNodes(store.db, thread.id)) {
+        const kind = store.db
+          .prepare(`SELECT kind FROM items WHERE id = ?`)
+          .pluck()
+          .get(ref.id) as string | undefined;
+
+        assert.notEqual(kind, "contact", `situation "${thread.title ?? ""}" contains a contact card`);
+      }
+    }
+  });
+
+  test("recurring notifications do not chain into a situation", () => {
+    // The top-ranked situation on the first real run was twenty Venmo receipts
+    // for one weekly transaction. Every statement in it was true.
+    const first: NodeRef = { kind: "item", id: itemFor("mail-venmo-0") };
+    const second: NodeRef = { kind: "item", id: itemFor("mail-venmo-3") };
+
+    assert.equal(
+      connected(first, second),
+      false,
+      "two instances of the same notification template were linked",
+    );
+
+    // And they share "wildwood" with the real shore conversation, so this also
+    // pins that a template cannot be dragged into someone else's situation.
+    const conversation = episodeFor("msg-shore-1");
+
+    assert.equal(
+      connected(conversation, first),
+      false,
+      "a payment notification was linked into the shore conversation",
+    );
+  });
+
+  test("every situation has something that actually happened in it", () => {
+    const spine = ["event", "task", "conversation"];
+
+    for (const thread of topThreads(store.db, PRINCIPAL, { minSources: 2, limit: 50 })) {
+      const kinds = threadNodes(store.db, thread.id).map((ref) =>
+        ref.kind === "episode"
+          ? "conversation"
+          : ((store.db.prepare(`SELECT kind FROM items WHERE id = ?`).pluck().get(ref.id) ??
+              "") as string),
+      );
+
+      assert.ok(
+        kinds.some((kind) => spine.includes(kind)),
+        `situation "${thread.title ?? ""}" is only mail: ${kinds.join(", ")}`,
+      );
+    }
+  });
+
+  test("the solo-word bar scales with the store", () => {
+    // The bug in one line: this used to be a constant 3 while the rarity
+    // ceiling scaled to 500. On a 40,000-item store that meant a word
+    // appearing 19 times needed a partner word, and "wildwood" got rejected.
+    assert.equal(soloCeilingFor(5), 3, "a tiny store should still have a floor of 3");
+    assert.equal(soloCeilingFor(500), 25, "a large store should let a rarer word stand alone");
+    assert.ok(soloCeilingFor(400) > 3, "the bar never went back to being a constant");
+  });
+
+  test("a hostname is not a distinctive word", () => {
+    // "amazonaws" was among the rarest-looking words in the store, because it
+    // is in the tracking pixel at the bottom of thousands of marketing emails.
+    const terms = contentTerms(
+      "Your statement is ready. https://tracking.us-east-1.amazonaws.com/x?id=9 " +
+        "Visit example.com for details about the Kearneys.",
+    );
+
+    assert.ok(!terms.includes("amazonaws"), `link host leaked into terms: ${terms.join(", ")}`);
+    assert.ok(!terms.includes("example"), `link host leaked into terms: ${terms.join(", ")}`);
+    assert.ok(terms.includes("kearneys"), "stripping links also removed real words");
   });
 });
 

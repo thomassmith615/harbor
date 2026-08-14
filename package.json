@@ -1,6 +1,6 @@
 {
   "name": "harbor",
-  "version": "0.31.0",
+  "version": "0.32.0",
   "description": "Local-first personal intelligence appliance. Messages, mail, calendars, and reminders, connected and reasoned over on your own machine.",
   "type": "module",
   "private": true,
@@ -18,7 +18,8 @@
     "clean": "node -e \"fs.rmSync('dist',{recursive:true,force:true})\"",
     "verify": "npm run typecheck && npm run build && node --test \"dist/**/*.test.js\"",
     "derive": "node dist/cli/main.js derive",
-    "test": "npm run build && node --test \"dist/**/*.test.js\""
+    "test": "npm run build && node --test \"dist/**/*.test.js\"",
+    "postbuild": "chmod +x dist/cli/main.js"
   },
   "dependencies": {
     "better-sqlite3": "^12.2.0",

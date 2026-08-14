@@ -16,7 +16,7 @@
  * fragments.
  */
 import { createHash } from "node:crypto";
-import { CONVERSATIONAL_CONNECTORS, itemsOf, nodeKey } from "./nodes.js";
+import { CONVERSATIONAL_CONNECTORS, itemsOf, NON_EVENT_KINDS, nodeKey } from "./nodes.js";
 import type { DB } from "../kernel/db.js";
 import type { NodeRef } from "./nodes.js";
 
@@ -509,6 +509,7 @@ export function countThreads(db: DB): number {
 // ---- pending work ----
 
 const CONVERSATIONAL_LIST = CONVERSATIONAL_CONNECTORS.map((id) => `'${id}'`).join(", ");
+const NON_EVENT_LIST = NON_EVENT_KINDS.map((kind) => `'${kind}'`).join(", ");
 
 /**
  * Nodes awaiting a relationship pass.
@@ -526,6 +527,7 @@ export function countPendingRelationships(db: DB, version: number): number {
               JOIN streams s ON s.id = i.stream_id
              WHERE i.deleted_at IS NULL
                AND s.connector_id NOT IN (${CONVERSATIONAL_LIST})
+               AND i.kind NOT IN (${NON_EVENT_LIST})
                AND (i.relationships_version IS NULL OR i.relationships_version < @version))
          + (SELECT COUNT(*) FROM episodes
              WHERE relationships_version IS NULL OR relationships_version < @version)
@@ -566,9 +568,39 @@ export function dismissConversationalItems(db: DB, version: number): number {
       `UPDATE items SET relationships_version = @version
        WHERE deleted_at IS NULL
          AND (relationships_version IS NULL OR relationships_version < @version)
-         AND stream_id IN (SELECT id FROM streams WHERE connector_id IN (${CONVERSATIONAL_LIST}))`,
+         AND (stream_id IN (SELECT id FROM streams WHERE connector_id IN (${CONVERSATIONAL_LIST}))
+              OR kind IN (${NON_EVENT_LIST}))`,
     )
     .run({ version }).changes;
+}
+
+/**
+ * Retires recurring notifications from the queue.
+ *
+ * Same contract as the conversational dismissal above: these are not skipped
+ * work, they are work that is complete, so the pass can report itself finished.
+ */
+export function dismissItems(db: DB, itemIds: readonly string[], version: number): number {
+  if (itemIds.length === 0) {
+    return 0;
+  }
+
+  const mark = db.prepare(
+    `UPDATE items SET relationships_version = @version
+     WHERE id = @id AND (relationships_version IS NULL OR relationships_version < @version)`,
+  );
+
+  let marked = 0;
+
+  const work = db.transaction(() => {
+    for (const id of itemIds) {
+      marked += mark.run({ id, version }).changes;
+    }
+  });
+
+  work();
+
+  return marked;
 }
 
 // ---- rebuilding ----

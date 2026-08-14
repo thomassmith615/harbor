@@ -28,11 +28,13 @@ import { LINKERS, RELATIONSHIP_VERSION } from "./linkers.js";
 import { candidatesFor } from "./candidates.js";
 import { indexReferences, REFERENCE_VERSION } from "./references.js";
 import { TermIndex } from "./terms.js";
+import { TemplateIndex } from "./templates.js";
 import {
   countEdges,
   countPendingRelationships,
   crossSourceEdges,
   dismissConversationalItems,
+  dismissItems,
   edgeBreakdown,
   link,
   markRelated,
@@ -187,6 +189,18 @@ export function relate(db: DB, options: RelateOptions): RelateReport {
     );
   }
 
+  const templates = new TemplateIndex(db);
+  const retired = dismissItems(db, templates.ids, RELATIONSHIP_VERSION);
+  const templateReport = templates.report();
+
+  if (templateReport.items > 0) {
+    options.onNote?.(
+      `${String(templateReport.items)} items across ${String(templateReport.shapes)} recurring ` +
+        `notification shapes are templates rather than events` +
+        (retired > 0 ? `, ${String(retired)} retired from the queue` : ""),
+    );
+  }
+
   const resolver = new NodeResolver(db);
   const terms = new TermIndex(db);
 
@@ -240,7 +254,7 @@ export function relate(db: DB, options: RelateOptions): RelateReport {
           continue;
         }
 
-        const set = candidatesFor(db, subject, { resolver, terms, selfEntityId });
+        const set = candidatesFor(db, subject, { resolver, terms, templates, selfEntityId });
         considered += set.candidates.length;
 
         for (const candidate of set.candidates) {
@@ -341,6 +355,7 @@ export function explain(
   const self = selfEntity(db);
   const selfEntityId = self === null ? null : self.id;
   const terms = new TermIndex(db);
+  const templates = new TemplateIndex(db);
 
   const context: LinkerContext = {
     principalId,
@@ -350,7 +365,7 @@ export function explain(
     entitiesOf: entityCache(db, selfEntityId),
   };
 
-  const set = candidatesFor(db, subject, { resolver, terms, selfEntityId });
+  const set = candidatesFor(db, subject, { resolver, terms, templates, selfEntityId });
 
   const people = [...entitiesOfNode(db, ref)].map((entityId) => {
     const row = db.prepare(`SELECT display_name AS name FROM entities WHERE id = ?`).get(entityId) as

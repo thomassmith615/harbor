@@ -251,7 +251,8 @@ const arranges: PairLinker = {
     }
 
     if (words.length > 0) {
-      const strong = words.length > 1 || context.terms.frequency(words[0] ?? "") <= 3;
+      const strong =
+        words.length > 1 || context.terms.frequency(words[0] ?? "") <= context.terms.soloCeiling;
 
       return {
         edge: {
@@ -366,7 +367,7 @@ function isStrongOverlap(words: readonly string[], terms: TermIndex): boolean {
 
   const only = words[0];
 
-  return only !== undefined && terms.frequency(only) <= 3;
+  return only !== undefined && terms.frequency(only) <= terms.soloCeiling;
 }
 
 /**
