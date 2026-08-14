@@ -16,7 +16,10 @@
  * Every check states what is wrong and what to run. A diagnostic that reports a
  * problem without a next step just moves the work.
  */
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { closeSync, existsSync, openSync, readdirSync, readSync, statSync } from "node:fs";
+import { keyOpens } from "../kernel/db.js";
+import { readSecret } from "../kernel/keychain.js";
+import type { KeySource } from "../kernel/encryption.js";
 import { join } from "node:path";
 import { harborHome } from "../kernel/paths.js";
 import { detectKeychain, isReference } from "../kernel/keychain.js";
@@ -144,7 +147,13 @@ function checkBackups(): readonly Finding[] {
     return [{ area: "backups", severity: "warn", detail: "none taken", fix: "harbor backup --encrypt" }];
   }
 
-  const plain = files.filter((name) => !name.endsWith(".enc"));
+  // Read the header, do not guess from the filename.
+  //
+  // A `VACUUM INTO` snapshot taken from an encrypted store inherits the cipher,
+  // so a plain `.db` name says nothing about whether the contents are readable.
+  // Calling that a problem sends somebody to delete a backup that was fine,
+  // which is the most expensive kind of wrong answer this command can give.
+  const plain = files.filter((name) => !isEncryptedFile(join(directory, name)));
   const newest = files
     .map((name) => statSync(join(directory, name)).mtimeMs)
     .reduce((max, value) => Math.max(max, value), 0);
@@ -173,22 +182,67 @@ function checkBackups(): readonly Finding[] {
   ];
 }
 
-function checkStore(db: DB): readonly Finding[] {
+
+/**
+ * Whether a file is an encrypted database, from its own first bytes.
+ *
+ * Covers both formats Harbor writes: a `VACUUM INTO` snapshot carrying the
+ * store cipher, and a passphrase backup, which begins with its own magic. Read
+ * the header rather than guessing from the filename, because a plain `.db` name
+ * says nothing about whether the contents are readable, and calling such a file
+ * a problem sends somebody to delete a backup that was fine.
+ */
+function isEncryptedFile(path: string): boolean {
+  try {
+    const handle = openSync(path, "r");
+
+    try {
+      const header = Buffer.alloc(16);
+      readSync(handle, header, 0, 16, 0);
+
+      const text = header.toString("latin1");
+
+      return text !== "SQLite format 3\u0000" || text.startsWith("HARBOR01");
+    } finally {
+      closeSync(handle);
+    }
+  } catch {
+    // Unreadable is not the same as unencrypted, and guessing "plaintext" would
+    // raise an alarm about a file nobody can open anyway.
+    return true;
+  }
+}
+
+function checkStore(db: DB, keySource: KeySource): readonly Finding[] {
   const path = join(harborHome(), "harbor.db");
   const size = existsSync(path) ? statSync(path).size : 0;
 
+  // Read from the file rather than asked of the driver: a header check cannot
+  // be wrong about this, and a process holding an unlocked handle would say
+  // everything is fine either way.
+  const encrypted = existsSync(path) && isEncryptedFile(path);
+
   const findings: Finding[] = [
-    {
-      area: "store",
-      severity: "warn",
-      detail:
-        `${bytes(size)} on disk, unencrypted. Message bodies, contacts, and everything derived ` +
-        `from them are readable by anything that can read the file.`,
-      // Named rather than fixed, because the honest answer is a decision rather
-      // than a command: full at-rest encryption needs a key at boot, and a
-      // passphrase typed at every restart is not an appliance.
-      fix: null,
-    },
+    encrypted
+      ? {
+          area: "store",
+          severity: "ok",
+          detail:
+            `${bytes(size)} on disk, encrypted, and the key Harbor is using opens it` +
+            (keySource === "environment"
+              ? ". That key is coming from HARBOR_STORE_KEY, not the keychain, so anything " +
+                "that does not inherit your shell (the daemon, a LaunchAgent) will not find it"
+              : ", from the keychain"),
+          fix: null,
+        }
+      : {
+          area: "store",
+          severity: "warn",
+          detail:
+            `${bytes(size)} on disk, unencrypted. Message bodies, contacts, and everything ` +
+            `derived from them are readable by anything that can read the file.`,
+          fix: "harbor settings encryption --enable",
+        },
   ];
 
   const pending = db
@@ -244,12 +298,16 @@ export interface DoctorReport {
 }
 
 export async function doctor(db: DB, now: number = Date.now()): Promise<DoctorReport> {
+  // Which key is actually in use, not merely which one exists. The difference
+  // decides whether the daemon can start, and it is the thing `doctor` is for.
+  const keySource = await workingKeySource(join(harborHome(), "harbor.db"));
+
   const backend = await detectKeychain();
 
   const findings = [
     ...checkCredentials(db, backend),
     ...checkSources(db, now),
-    ...checkStore(db),
+    ...checkStore(db, keySource),
     ...checkBackups(),
     ...checkSchedule(db),
   ];
@@ -259,4 +317,28 @@ export async function doctor(db: DB, now: number = Date.now()): Promise<DoctorRe
     problems: findings.filter((finding) => finding.severity === "problem").length,
     warnings: findings.filter((finding) => finding.severity === "warn").length,
   };
+}
+
+/**
+ * Where the key that opens the store came from, or that nothing does.
+ *
+ * "The key is in the keychain" was printed unconditionally whenever the store
+ * was encrypted, which was true, useless, and actively misleading on the one
+ * morning it mattered: the keychain held a key that did not open anything and
+ * `doctor` cheerfully said everything was fine while the daemon crash-looped.
+ */
+async function workingKeySource(path: string): Promise<KeySource> {
+  if (!isEncryptedFile(path)) {
+    return "none";
+  }
+
+  const fromEnv = process.env["HARBOR_STORE_KEY"];
+
+  if (fromEnv !== undefined && fromEnv.length > 0 && keyOpens(path, fromEnv.trim())) {
+    return "environment";
+  }
+
+  const fromKeychain = await readSecret("store-encryption-key");
+
+  return fromKeychain !== null && keyOpens(path, fromKeychain) ? "keychain" : "none";
 }

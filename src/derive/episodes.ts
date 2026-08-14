@@ -124,10 +124,21 @@ function conversationalStreamIds(db: DB): readonly string[] {
  * enough to recognize one in a list; the transcript is what search matches
  * against.
  */
+/**
+ * Who was in it. Not how many messages.
+ *
+ * The count used to be baked into the title, which read as "+1610... (8
+ * messages) (8 messages)" wherever a surface added its own, and worse, it
+ * defeated the test that decides whether a title is a bare handle: a phone
+ * number is recognisable and a phone number with a parenthetical on the end is
+ * not, so raw handles won the naming contest against real subject lines.
+ *
+ * Size is a property of the episode and every surface already has it.
+ */
 function titleFor(participants: readonly string[], count: number): string {
-  const who = participants.length === 0 ? "Conversation" : participants.join(", ");
+  void count;
 
-  return `${who} (${String(count)} message${count === 1 ? "" : "s"})`;
+  return participants.length === 0 ? "Conversation" : participants.join(", ");
 }
 
 function speakerOf(row: MessageRow): string {

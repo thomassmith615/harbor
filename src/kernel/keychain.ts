@@ -139,7 +139,12 @@ export async function readSecret(accountId: string): Promise<string | null> {
         "-w",
       ]);
 
-      return stdout.trim();
+      // An empty entry is not a credential. Returning "" made callers treat a
+      // blank keychain item as a real value, which for the store key meant
+      // trying to unlock a database with nothing.
+      const value = stdout.trim();
+
+      return value.length === 0 ? null : value;
     }
 
     if (backend === "libsecret") {

@@ -330,7 +330,7 @@ function taskCandidates(
         `SELECT id, stream_id FROM items
          WHERE kind IN ('message', 'event') AND deleted_at IS NULL AND id <> @id
            AND occurred_at BETWEEN @from AND @to
-         ORDER BY ABS(occurred_at - @at) ASC LIMIT 120`,
+         ORDER BY ABS(occurred_at - @at) ASC LIMIT 40`,
       )
       .all({ id: subject.ref.id, from, to, at: subject.occurredAt }) as {
       id: string;

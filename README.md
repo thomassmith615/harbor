@@ -134,10 +134,20 @@ edges drawn and the reason each rejection happened.
 
 ## Privacy
 
-Credentials live in the system keychain. Backups are encrypted. **The store
-itself is not encrypted at rest**, which is a deliberate and currently
-outstanding decision: a stolen laptop reads everything. `harbor doctor` restates
-this every run until it is fixed.
+Credentials live in the system keychain. Backups are encrypted. The store can be
+encrypted at rest:
+
+```
+harbor settings encryption --enable
+```
+
+That rewrites every page of the file in place and puts a 32-byte key in the
+keychain. FTS5, WAL, and the vector index all keep working; without the key the
+file is not a database.
+
+**Lose the key and the store is gone.** There is no recovery, by design, because
+a recoverable key is a second copy of the key. The command prints it once so it
+can be written down somewhere that is not this machine.
 
 One gate, one chokepoint, no bypass. Every item on its way to a model passes
 through `src/policy/gate.ts`, which decides, redacts, and reports what it did.
@@ -204,7 +214,6 @@ that says only "haha ok" must connect to nothing.
 
 ## Known gaps
 
-- The store is not encrypted at rest.
 - Household support is schema, custodian, visibility, and search scoping only.
   Entity resolution, commitments, detectors, and the digest all assume one
   person.

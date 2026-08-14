@@ -7,7 +7,14 @@
  * only true if none of the logic leaks into this file.
  */
 import { Command } from "commander";
-import { openDatabase } from "../kernel/db.js";
+import { openDatabase, primeStoreKeys } from "../kernel/db.js";
+import {
+  encryptStore,
+  isEncrypted,
+  keychainKeyOpensStore,
+  storeKeyCandidates,
+  storeKeyWithSource,
+} from "../kernel/encryption.js";
 import { inspectCards } from "../derive/contacts.js";
 import {
   clearEdges,
@@ -562,6 +569,16 @@ async function main(): Promise<number> {
   // turning the whole store layer inside out. A store with no keychain-backed
   // accounts does no work at all.
   program.hook("preAction", async () => {
+    // The store key first, and outside the try: every other statement in
+    // Harbor, including the migration runner, needs the database unlocked, so a
+    // missing key has to be a loud failure rather than a swallowed one.
+    primeStoreKeys(await storeKeyCandidates());
+
+    // No check for a missing key here on purpose. `openDatabase` decides, from
+    // the file itself, whether a key is needed and whether the one it has
+    // works, so there is one place that knows rather than two that can
+    // disagree.
+
     try {
       const { db } = openDatabase();
 
@@ -3186,7 +3203,7 @@ async function main(): Promise<number> {
     .description("Write a launchd plist or systemd unit for the daemon")
     .option("--port <port>", "HTTP port", "8484")
     .option("--host <host>", "bind address", "127.0.0.1")
-    .action((options: { port: string; host: string }) => {
+    .action(async (options: { port: string; host: string }) => {
       const port = Number.parseInt(options.port, 10);
 
       const spec = {
@@ -3204,6 +3221,24 @@ async function main(): Promise<number> {
 
       for (const line of installInstructions(process.platform, path)) {
         logger.print(line);
+      }
+
+      // A service manager gets the keychain and nothing else.
+      //
+      // launchd does not run a login shell, so it never sees a shell profile. A
+      // key exported in .bashrc works in a terminal and is invisible to the
+      // daemon, and the only symptom is a crash loop against a log nobody is
+      // watching. Saying so at install time costs one line and saves an hour.
+      if (await isEncrypted()) {
+        if (!(await keychainKeyOpensStore())) {
+          logger.print("");
+          logger.warn("the keychain does not hold a key that opens this store");
+          logger.print("This service will not start. launchd does not read your shell profile,");
+          logger.print("so HARBOR_STORE_KEY set there cannot reach it. Fix the keychain first:");
+          logger.print("");
+          logger.print("  security delete-generic-password -s harbor -a store-encryption-key");
+          logger.print("  security add-generic-password -s harbor -a store-encryption-key -w <key>");
+        }
       }
     });
 
@@ -4003,6 +4038,78 @@ async function main(): Promise<number> {
         );
       } finally {
         db.close();
+      }
+    });
+
+  settings
+    .command("encryption")
+    .option("--enable", "encrypt the store in place, once")
+    .option("--show-key", "print the key so it can be written down")
+    .description("Whether the store itself is encrypted on disk")
+    .action(async (options: { enable?: boolean; showKey?: boolean }) => {
+      const encrypted = await isEncrypted();
+
+      if (options.enable === true) {
+        if (encrypted) {
+          logger.print("Already encrypted.");
+          return;
+        }
+
+        logger.print("This rewrites every page of the store. Do not interrupt it.");
+
+        const report = await encryptStore({
+          onNote: (message) => {
+            logger.print(`  ${message}`);
+          },
+        });
+
+        logger.print("");
+        logger.print(`Encrypted ${(report.bytes / 1_048_576).toFixed(0)} MB in ${formatDuration(report.durationMs)}.`);
+        logger.print("");
+
+        if (report.keychain) {
+          logger.print("The key is in your keychain. Harbor will find it on its own.");
+        } else {
+          logger.warn("no keychain available, so the key could not be stored for you");
+          logger.print("Set HARBOR_STORE_KEY in your environment or Harbor cannot open the store.");
+        }
+
+        logger.print("");
+        logger.print(`  ${report.key}`);
+        logger.print("");
+        logger.print("Write that down somewhere that is not this machine. There is no recovery:");
+        logger.print("lose the key and the store is unreadable, which is the point of encrypting it.");
+        return;
+      }
+
+      if (!encrypted) {
+        logger.print("The store is not encrypted.");
+        logger.print("");
+        logger.print("Message bodies, contacts, and everything derived from them are readable by");
+        logger.print("anything that can read the file: a stolen laptop, a Time Machine volume, a");
+        logger.print("backup that syncs somewhere.");
+        logger.print("");
+        logger.print("  harbor settings encryption --enable");
+        return;
+      }
+
+      logger.print("The store is encrypted.");
+
+      const { key, source } = await storeKeyWithSource();
+
+      logger.print(
+        source === "keychain"
+          ? "The key is in your keychain."
+          : source === "environment"
+            ? "The key is coming from HARBOR_STORE_KEY, not the keychain."
+            : "No key found. Harbor cannot open this store.",
+      );
+
+      if (options.showKey === true && key !== null) {
+        logger.print("");
+        logger.print(`  ${key}`);
+      } else if (key !== null) {
+        logger.print("`--show-key` prints it, for writing down.");
       }
     });
 

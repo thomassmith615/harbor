@@ -23,7 +23,16 @@
 import { copyFileSync, existsSync, mkdtempSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import Database from "better-sqlite3";
+// The same driver the store uses, deliberately.
+//
+// `chat.db` is Apple's file and is not encrypted, so this could open it with
+// plain better-sqlite3. Shipping two native SQLite modules to read two SQLite
+// files means two prebuild matrices to keep working on an appliance meant to
+// run unattended, and it already broke once: the store driver was swapped for
+// the cipher build and this import kept the old package alive as an invisible
+// dependency until it was removed from package.json and everything stopped
+// loading. One driver.
+import Database from "better-sqlite3-multiple-ciphers";
 import { UpstreamError } from "../../kernel/errors.js";
 import { appleDate, extractText } from "./attributed.js";
 import { plausibleTime } from "../../store/items.js";

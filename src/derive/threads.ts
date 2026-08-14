@@ -16,6 +16,7 @@
 import { clearThreads, saveThread } from "../store/relationships.js";
 import type { DB } from "../kernel/db.js";
 import type { NodeRef } from "../store/nodes.js";
+import type { NoiseIndex } from "./noise.js";
 
 /** Below this, an edge is a hint rather than a reason to group things. */
 const MIN_CONFIDENCE = 0.45;
@@ -50,6 +51,8 @@ interface NodeFacts {
   readonly title: string | null;
   readonly occurredAt: number;
   readonly streamId: string;
+  /** One-way mail. Several of these are one order, not several events. */
+  readonly oneWay: boolean;
 }
 
 export interface ThreadReport {
@@ -69,7 +72,7 @@ function keyOf(kind: string, id: string): string {
  * second and one that takes a minute, and the rebuild runs at the end of every
  * relate pass.
  */
-function loadFacts(db: DB): Map<string, NodeFacts> {
+function loadFacts(db: DB, noise?: NoiseIndex): Map<string, NodeFacts> {
   const facts = new Map<string, NodeFacts>();
 
   const items = db
@@ -96,6 +99,7 @@ function loadFacts(db: DB): Map<string, NodeFacts> {
       title: row.title,
       occurredAt: row.occurred_at,
       streamId: row.stream_id,
+      oneWay: noise?.isBroadcast(row.id) ?? false,
     });
   }
 
@@ -117,6 +121,7 @@ function loadFacts(db: DB): Map<string, NodeFacts> {
       title: row.title,
       occurredAt: row.starts_at,
       streamId: row.stream_id,
+      oneWay: false,
     });
   }
 
@@ -136,6 +141,24 @@ function loadFacts(db: DB): Map<string, NodeFacts> {
  * untouched, so a rename in Contacts shows up on the next pass without any
  * migration.
  */
+/** A phone number or short-code, with or without punctuation. */
+export function isHandle(value: string): boolean {
+  return /^\+?\d[\d\s()-]{6,}$/.test(value.trim());
+}
+
+/**
+ * A title that is nothing but handles.
+ *
+ * Group conversations are titled with a comma-separated list, and testing the
+ * whole string against a phone-number pattern never matched one, so a group
+ * chat beat a real subject line whenever both were in the same situation.
+ */
+export function isHandleTitle(title: string): boolean {
+  const parts = title.split(",").map((part) => part.trim()).filter((part) => part.length > 0);
+
+  return parts.length > 0 && parts.every(isHandle);
+}
+
 function nameHandles(db: DB, title: string): string {
   const lookup = db.prepare(
     `SELECT e.display_name AS name FROM identifiers i
@@ -147,7 +170,7 @@ function nameHandles(db: DB, title: string): string {
   const named = title.split(",").map((part) => {
     const handle = part.trim();
 
-    if (!/^\+?\d[\d\s()-]{6,}$/.test(handle)) {
+    if (!isHandle(handle)) {
       return handle;
     }
 
@@ -168,7 +191,7 @@ function nameHandles(db: DB, title: string): string {
   return named.join(", ");
 }
 
-export function buildThreads(db: DB, principalId: string): ThreadReport {
+export function buildThreads(db: DB, principalId: string, noise?: NoiseIndex): ThreadReport {
   clearThreads(db);
 
   const edges = db
@@ -235,7 +258,7 @@ export function buildThreads(db: DB, principalId: string): ThreadReport {
     components.set(root, existing);
   }
 
-  const facts = loadFacts(db);
+  const facts = loadFacts(db, noise);
 
   let threads = 0;
   let crossSource = 0;
@@ -260,6 +283,19 @@ export function buildThreads(db: DB, principalId: string): ThreadReport {
     // One source is a conversation, which the source application already shows
     // better than Harbor would. Two or more is the thing Harbor is for.
     if (sources.size < 2) {
+      continue;
+    }
+
+    // A shipping lifecycle is one order.
+    //
+    // "Order 295403 confirmed", "on the way", "out for delivery", "delivered"
+    // genuinely share an order number, so `shares_reference` is right to join
+    // them, and thirteen of them is still one purchase rather than a situation.
+    // Counted as one thing, which usually leaves the component too thin to
+    // qualify and always stops it looking like a discovery.
+    const broadcastMail = nodes.filter((node) => node.kind === "message" && node.oneWay);
+
+    if (broadcastMail.length > 1 && nodes.length - broadcastMail.length < 2) {
       continue;
     }
 
@@ -324,7 +360,7 @@ function titleFor(db: DB, nodes: readonly NodeFacts[]): string | null {
   // A subject line beats a handle, whatever order the nodes are in: "crabbing"
   // says what the situation is and "+13392047146" makes you go and look.
   const titled = nodes.find(
-    (node) => (node.title ?? "").length > 3 && !/^\+?\d[\d\s()-]{6,}$/.test(node.title ?? ""),
+    (node) => (node.title ?? "").length > 3 && !isHandleTitle(node.title ?? ""),
   );
 
   if (titled !== undefined) {

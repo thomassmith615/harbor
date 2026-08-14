@@ -13,7 +13,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { openDatabase } from "../kernel/db.js";
+import { openDatabase, primeStoreKey } from "../kernel/db.js";
 import type { DB } from "../kernel/db.js";
 import type { Embedder } from "../derive/embed/index.js";
 
@@ -34,6 +34,9 @@ export function openTestStore(): TestStore {
   // every assertion here actually depends on.
   const previousEmbed = process.env["HARBOR_EMBED"];
   process.env["HARBOR_EMBED"] = "none";
+
+  // Same order as the real startup path: key first, then open.
+  primeStoreKey(null);
 
   const { db } = openDatabase();
 

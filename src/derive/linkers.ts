@@ -303,6 +303,19 @@ const tracks: PairLinker = {
     const [task, other] = pair;
     const gap = Math.abs(task.occurredAt - other.occurredAt);
 
+    // A reminder covers one thing.
+    //
+    // "HAIRCUT 7:30PM" matched six separate conversations and "wash sheets"
+    // five, because a short generic reminder finds its own words in every
+    // conversation within three weeks. Halving the window is not the fix; the
+    // fix is that the *nearest* occasion is the one the reminder is about, and
+    // a match a fortnight away is a different haircut.
+    if (gap > 7 * 86_400_000) {
+      return {
+        rejected: `${describeGap(gap)} apart, and a reminder is about the nearest occasion`,
+      };
+    }
+
     if (gap > TRACKS_WINDOW_MS) {
       return { rejected: `${describeGap(gap)} apart, past the window for a reminder` };
     }

@@ -302,7 +302,7 @@ export function relate(db: DB, options: RelateOptions): RelateReport {
   // rebuild reads edges rather than items. Ids are derived from membership, so a
   // rebuild that finds the same situation gives it the same id and anything
   // referring to it survives.
-  const threads = buildThreads(db, options.principalId);
+  const threads = buildThreads(db, options.principalId, noise);
 
   if (threads.threads > 0) {
     options.onNote?.(`${String(threads.threads)} situations spanning more than one source`);

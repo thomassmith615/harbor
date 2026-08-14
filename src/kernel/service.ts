@@ -50,6 +50,10 @@ export function launchdPlist(options: ServiceOptions): string {
     <string>${harborHome()}</string>
     <key>HARBOR_TIMEZONE</key>
     <string>${options.timezone}</string>
+    <!-- launchd hands a process a near-empty PATH. The keychain shells out to
+         /usr/bin/security, so this is insurance rather than decoration. -->
+    <key>PATH</key>
+    <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
   </dict>
 
   <key>RunAtLoad</key>
@@ -68,7 +72,7 @@ export function launchdPlist(options: ServiceOptions): string {
   <string>${join(logDir, "harbor.log")}</string>
 
   <key>StandardErrorPath</key>
-  <string>${join(logDir, "harbor.err.log")}</string>
+  <string>${join(logDir, "harbor.log")}</string>
 </dict>
 </plist>
 `;
