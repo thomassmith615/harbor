@@ -11,7 +11,7 @@
  * So: addresses create and key entities. Names attach as labels and as search
  * handles, but a name alone never merges two entities and never creates one
  * that an address could later collide with. Two people called John Smith stay
- * two entities until they share an address or a human runs `harbor merge`.
+ * two entities until they share an address or a human runs `harbor people merge`.
  *
  * This deliberately under-merges. The failure it avoids is the one with no
  * visible symptom: silently welding two people together produces confident,
@@ -337,7 +337,7 @@ export function resolveEntities(db: DB, options: ResolveOptions = {}): ResolveRe
     options.onNote?.(
       `${String(contacts.unanchored.length)} cards have a name but no address or phone ` +
         `Harbor could read (${contacts.unanchored.slice(0, 3).join(", ")}...); ` +
-        "run `harbor contacts` to see them",
+        "run `harbor people cards` to see them",
     );
   }
 
@@ -439,7 +439,7 @@ export function resolveEntities(db: DB, options: ResolveOptions = {}): ResolveRe
 
           // Spam forging your own address in the From header attaches whatever
           // name it invented to the entity that owns that address, which is
-          // you. Correct by the rules and useless in practice: `harbor person`
+          // you. Correct by the rules and useless in practice: `harbor people show`
           // filled with "Tyrone Knight" and "Dental Implant Options". Names
           // only stick to `self` when they arrive from something authoritative,
           // which in practice means the address book.

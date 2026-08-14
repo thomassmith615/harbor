@@ -15,11 +15,28 @@ and that gate is audited.
 ## Running it
 
 ```
-harbor init          set up the store
-harbor connect       authorize your sources        (currently: harbor auth <source>)
-harbor update        bring everything up to date
-harbor ask "..."     the actual product
+harbor init                set up the store
+harbor auth <source>       authorize a source
+harbor update              bring everything up to date
+harbor ask "..."           the actual product
 ```
+
+Then the nouns, each of which lists by default and takes an id:
+
+```
+harbor situations          what spans more than one source
+harbor commitments         what you said would happen and has not
+harbor conversations       what was discussed
+harbor purchases           what was bought, and what it cost
+harbor people              who is who
+harbor digest              the few things worth knowing
+harbor doctor              what is broken, exposed, or behind
+```
+
+`harbor settings` holds everything about how Harbor behaves (schedules, egress
+policy, detectors, models, spend, secrets). `harbor dev` holds the pipeline
+stages and diagnostics, which describe Harbor's internals rather than anything a
+person wants. Thirty-one top-level commands, down from ninety-two.
 
 `harbor update` runs the whole pipeline in the only correct order. Recent mail,
 messages, calendars, and reminders come first, so Harbor is answerable within a
@@ -129,8 +146,8 @@ something is told so, because a model that does not know it is missing items
 answers as though it saw everything.
 
 ```
-harbor policy list       what may leave this machine
-harbor audit             every model call, what it cost, what it saw
+harbor settings policy   what may leave this machine
+harbor settings audit    every model call, what it cost, what it saw
 harbor doctor            what is broken, exposed, or behind
 ```
 
@@ -191,8 +208,11 @@ that says only "haha ok" must connect to nothing.
 - Household support is schema, custodian, visibility, and search scoping only.
   Entity resolution, commitments, detectors, and the digest all assume one
   person.
-- `src/cli/main.ts` is one large file and the command surface is still larger
-  than an appliance warrants. The pipeline stages have moved behind `harbor dev`;
-  collapsing the nouns is next.
-- `src/actions/` (write actions) is present, unfinished, and unused.
-- Gmail attachments are referenced but not fetched.
+- `src/cli/main.ts` is still one file of about 3,900 lines. The surface it
+  registers is now the right shape; the file is not.
+- `harbor auth` is three source-specific flows where it should be one
+  interactive `connect` that detects the platform and offers what is available.
+- Gmail attachments are referenced but not fetched, and a good share of receipts
+  are PDFs.
+- Harbor reads and never writes. Write actions were removed rather than left
+  half-finished; if they come back it should be deliberately.

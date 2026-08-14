@@ -77,7 +77,7 @@ function checkCredentials(db: DB, backend: string): readonly Finding[] {
         `${String(inDatabase.length)} of ${String(rows.length)} stored in the database in plain text ` +
         `(${inDatabase.map((row) => row.source_type).join(", ")})` +
         (backend === "none" ? ", and no keychain is available on this machine" : ""),
-      fix: backend === "none" ? null : "harbor secrets --move",
+      fix: backend === "none" ? null : "harbor settings secrets --move",
     },
   ];
 }
@@ -229,7 +229,7 @@ function checkSchedule(db: DB): readonly Finding[] {
         area: "schedule",
         severity: "warn",
         detail: "nothing runs unattended, so Harbor only updates when you ask it to",
-        fix: "harbor schedule add pulse --every 15m",
+        fix: "harbor settings schedule add pulse --every 15m",
       },
     ];
   }

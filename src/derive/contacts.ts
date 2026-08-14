@@ -14,7 +14,7 @@
  *   set a display name and pin it, so resolution stops second-guessing it
  *
  * Both are recorded as merges rather than rewrites, so they are inspectable and
- * `harbor unlink` still undoes them.
+ * `harbor people unlink` still undoes them.
  */
 import {
   createEntity,

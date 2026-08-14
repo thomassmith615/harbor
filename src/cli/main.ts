@@ -124,8 +124,6 @@ import { activeCodes, issueCode } from "../store/pairing.js";
 import type { JobTask } from "../jobs/runner.js";
 import { serveMcp } from "../surfaces/mcp.js";
 import { listDevices, pairDevice, revokeDevice } from "../store/devices.js";
-import { approveAndExecute, listActions, propose, reject } from "../actions/types.js";
-import { ACTIONS, actionById } from "../actions/registry.js";
 import { installInstructions, launchdPlist, systemdUnit } from "../kernel/service.js";
 import { writeFileSync } from "node:fs";
 import { join, resolve as resolvePath } from "node:path";
@@ -551,6 +549,34 @@ async function main(): Promise<number> {
     .command("dev")
     .description("Pipeline stages and inspection tools, for working on Harbor itself");
 
+  // How Harbor behaves, in one place.
+  //
+  // Schedules, egress policy, detectors, account weight, router tiers, spend,
+  // interests, and secrets are all "how Harbor behaves", they are all rarely
+  // touched, and each of them used to own a top-level verb. Eight groups a
+  // person reads past to find the six they actually use.
+  const settings = program
+    .command("settings")
+    .description("How Harbor behaves: schedules, policy, detectors, models, secrets");
+
+  // Who is who.
+  //
+  // `person`, `merge`, `unlink`, and `rename` are all things you do to a person
+  // and none of them deserved a verb of its own. `harbor people` still lists
+  // them, because listing is what you want nine times out of ten.
+  const people = program.command("people").description("Who Harbor knows about");
+
+  // Nouns take an optional id.
+  //
+  // `commitments` and `commitment` were one verb wearing two hats, and so were
+  // conversations, digests, facts, and purchases. Listing is what you want nine
+  // times out of ten, so it stays the default and the rest become subcommands.
+  const commitments = program.command("commitments").description("What you said would happen and has not happened yet");
+  const conversations = program.command("conversations").description("What was discussed");
+  const purchases = program.command("purchases").description("What was bought, and what it cost");
+  const facts = program.command("facts").description("What Harbor knows about you");
+  const digest = program.command("digest").description("The few things worth knowing");
+
   program
     .command("init")
     .description("Create the Harbor state directory and database")
@@ -563,7 +589,7 @@ async function main(): Promise<number> {
       // did precisely nothing after the first manual run. For something meant
       // to sit in a closet, an empty schedule table is the wrong default: the
       // appliance should keep itself current and the owner should have to opt
-      // out, not discover `harbor schedule` and opt in.
+      // out, not discover `harbor settings schedule` and opt in.
       //
       // Deliberately modest. A pulse often enough to feel live, the expensive
       // passes overnight, and one digest in the morning.
@@ -596,7 +622,7 @@ async function main(): Promise<number> {
       );
       if (scheduled) {
         logger.print("Schedules      pulse every 15m, derive and commit overnight, digest at 7am");
-        logger.print("               (`harbor schedule` to change or disable any of it)");
+        logger.print("               (`harbor settings schedule` to change or disable any of it)");
       }
 
       logger.print("");
@@ -787,7 +813,7 @@ async function main(): Promise<number> {
       },
     );
 
-  program
+  dev
     .command("calendars")
     .description("List the calendars Harbor can see")
     .action(async () => {
@@ -904,7 +930,7 @@ async function main(): Promise<number> {
       },
     );
 
-  program
+  dev
     .command("imessage")
     .argument("[action]", "check")
     .description("Diagnose iMessage text extraction on this Mac")
@@ -1107,8 +1133,8 @@ async function main(): Promise<number> {
       }
     });
 
-  program
-    .command("purchases")
+  purchases
+    .command("list", { isDefault: true })
     .description("What has been bought, most recent first")
     .option("--days <count>", "how far back, default 90")
     .option("--merchant <name>", "narrow to one merchant")
@@ -1153,8 +1179,8 @@ async function main(): Promise<number> {
       }
     });
 
-  program
-    .command("spend")
+  purchases
+    .command("merchants")
     .description("What has been spent, grouped by merchant")
     .option("--days <count>", "how far back, default 90")
     .action((options: { days?: string }) => {
@@ -1193,7 +1219,7 @@ async function main(): Promise<number> {
       }
     });
 
-  program
+  dev
     .command("attachments")
     .argument("[item]", "an item id, to list just its files")
     .description("Files that arrived with your mail, and what text came out of them")
@@ -1242,8 +1268,8 @@ async function main(): Promise<number> {
       }
     });
 
-  program
-    .command("digest")
+  digest
+    .command("list", { isDefault: true })
     .description("The few things worth knowing, delivered")
     .option("--preview", "compose without recording or suppressing anything")
     .option("--notify", "also send a local notification")
@@ -1294,8 +1320,8 @@ async function main(): Promise<number> {
       }
     });
 
-  program
-    .command("digests")
+  digest
+    .command("history")
     .description("What Harbor has said recently")
     .action(() => {
       const { db } = openDatabase();
@@ -1319,7 +1345,7 @@ async function main(): Promise<number> {
       }
     });
 
-  program
+  settings
     .command("weight")
     .argument("[account]", "account id, or a provider name. Omit to list.")
     .argument("[value]", "0 to 2. Lower means less likely to be surfaced.")
@@ -1365,8 +1391,8 @@ async function main(): Promise<number> {
       }
     });
 
-  program
-    .command("commitments")
+  commitments
+    .command("list", { isDefault: true })
     .description("What has been said would happen and has not happened yet")
     .option("--all", "include done, lapsed, and cancelled")
     .option("--lapsed", "only the ones nothing has touched since they were due")
@@ -1429,8 +1455,8 @@ async function main(): Promise<number> {
       }
     });
 
-  program
-    .command("commitment")
+  commitments
+    .command("show")
     .argument("<id>", "commitment id")
     .description("One commitment and every source that contributed to it")
     .action((id: string) => {
@@ -1564,8 +1590,8 @@ async function main(): Promise<number> {
       }
     });
 
-  program
-    .command("conversations")
+  conversations
+    .command("list", { isDefault: true })
     .argument("[query]", "what the conversation was about")
     .description("Search conversations rather than individual messages")
     .option("-n, --limit <count>", "how many, default 6")
@@ -1603,8 +1629,8 @@ async function main(): Promise<number> {
       }
     });
 
-  program
-    .command("conversation")
+  conversations
+    .command("show")
     .argument("<id>", "episode id")
     .description("The full transcript of one conversation")
     .action((id: string) => {
@@ -1805,8 +1831,8 @@ async function main(): Promise<number> {
       }
     });
 
-  program
-    .command("contacts")
+  people
+    .command("cards")
     .argument("[query]", "narrow to cards whose name matches")
     .description("Every contact card and what Harbor could read from it")
     .action((query: string | undefined) => {
@@ -1852,7 +1878,7 @@ async function main(): Promise<number> {
       }
     });
 
-  program
+  dev
     .command("chats")
     .description("Recent conversations")
     .option("-n, --limit <count>", "how many", "10")
@@ -1875,13 +1901,13 @@ async function main(): Promise<number> {
         }
 
         logger.print("");
-        logger.print("harbor chat <id> to read one. harbor ask -c <id> to continue it.");
+        logger.print("harbor dev chat <id> to read one. harbor ask -c <id> to continue it.");
       } finally {
         db.close();
       }
     });
 
-  program
+  dev
     .command("chat")
     .argument("<id>", "conversation id")
     .description("Read a conversation back")
@@ -2054,8 +2080,8 @@ async function main(): Promise<number> {
       }
     });
 
-  program
-    .command("people")
+  people
+    .command("list", { isDefault: true })
     .description("Who Harbor knows about, by how much correspondence there is")
     .option("-n, --limit <count>", "how many to show", "25")
     .option("--all", "include newsletters and senders you have never written to")
@@ -2093,8 +2119,8 @@ async function main(): Promise<number> {
       }
     });
 
-  program
-    .command("person")
+  people
+    .command("show")
     .argument("<query...>", "name, partial name, or address")
     .description("Everything Harbor knows about one person")
     .action((parts: string[]) => {
@@ -2132,7 +2158,7 @@ async function main(): Promise<number> {
       }
     });
 
-  program
+  people
     .command("merge")
     .argument("<source>", "entity id to fold in")
     .argument("<target>", "entity id to keep")
@@ -2149,7 +2175,7 @@ async function main(): Promise<number> {
       }
     });
 
-  program
+  people
     .command("unlink")
     .argument("<address>", "email address to detach onto its own entity")
     .description("Undo a wrong merge by splitting one address out")
@@ -2170,7 +2196,7 @@ async function main(): Promise<number> {
       }
     });
 
-  program
+  people
     .command("rename")
     .argument("<id>", "entity id")
     .argument("<name...>", "what to call them")
@@ -2239,7 +2265,7 @@ async function main(): Promise<number> {
       },
     );
 
-  const interest = program.command("interest").description("What you are working on");
+  const interest = settings.command("interest").description("What you are working on");
 
   interest
     .command("add")
@@ -2272,7 +2298,7 @@ async function main(): Promise<number> {
     });
 
   interest
-    .command("list")
+    .command("list", { isDefault: true })
     .description("Everything Harbor is watching for")
     .option("--all", "include dormant and dismissed")
     .action((options: { all?: boolean }) => {
@@ -2287,7 +2313,7 @@ async function main(): Promise<number> {
         const records = listInterests(db, DEFAULT_PRINCIPAL, states);
 
         if (records.length === 0) {
-          logger.print('Nothing yet. Try: harbor interest add "looking at new roles"');
+          logger.print('Nothing yet. Try: harbor settings interest add "looking at new roles"');
           return;
         }
 
@@ -2351,18 +2377,18 @@ async function main(): Promise<number> {
         for (const detector of report.suppressed) {
           logger.print("");
           logger.print(`Muted ${detector}: you dismissed most of what it produced.`);
-          logger.print(`Re-enable with \`harbor detectors --enable ${detector}\`.`);
+          logger.print(`Re-enable with \`harbor settings detectors --enable ${detector}\`.`);
         }
 
         logger.print("");
         logger.print(`Took           ${formatDuration(report.durationMs)}`);
-        logger.print("Next: harbor brief");
+        logger.print("Next: harbor dev brief");
       } finally {
         db.close();
       }
     });
 
-  program
+  dev
     .command("brief")
     .description("What Harbor thinks is worth your attention right now")
     .option("-n, --budget <count>", "how many things, at most", String(DEFAULT_BUDGET))
@@ -2413,7 +2439,7 @@ async function main(): Promise<number> {
       }
     });
 
-  program
+  settings
     .command("detectors")
     .description("How each detector is performing")
     .option("--enable <id>", "un-mute a detector")
@@ -2503,10 +2529,10 @@ async function main(): Promise<number> {
       }
     });
 
-  const policy = program.command("policy").description("What may leave this machine");
+  const policy = settings.command("policy").description("What may leave this machine");
 
   policy
-    .command("list")
+    .command("list", { isDefault: true })
     .description("Rules, in the order they are evaluated")
     .option("--all", "include disabled rules")
     .action((options: { all?: boolean }) => {
@@ -2623,7 +2649,7 @@ async function main(): Promise<number> {
       }
     });
 
-  program
+  settings
     .command("audit")
     .description("What left this machine, and under which rule")
     .option("-n, --limit <count>", "how many entries", "20")
@@ -2663,7 +2689,7 @@ async function main(): Promise<number> {
       }
     });
 
-  program
+  settings
     .command("cost")
     .description("Spend by task class, so the number is actionable")
     .option("--days <count>", "window", "30")
@@ -2704,7 +2730,7 @@ async function main(): Promise<number> {
       }
     });
 
-  program
+  settings
     .command("router")
     .description("Which tier handles what, and whether it is still good enough")
     .option("--reset <task>", "clear a demotion, with --tier")
@@ -2749,7 +2775,7 @@ async function main(): Promise<number> {
       }
     });
 
-  const schedule = program.command("schedule").description("What runs unattended");
+  const schedule = settings.command("schedule").description("What runs unattended");
 
   schedule
     .command("add")
@@ -2771,7 +2797,7 @@ async function main(): Promise<number> {
         throw new HarborError("Give either --every or --at", {
           code: "usage.no_trigger",
           exitCode: EXIT_CODES.usage,
-          hint: "harbor schedule add sync --every 15   |   harbor schedule add pipeline --at 06:30",
+          hint: "harbor settings schedule add sync --every 15   |   harbor settings schedule add pipeline --at 06:30",
         });
       }
 
@@ -2802,7 +2828,7 @@ async function main(): Promise<number> {
     });
 
   schedule
-    .command("list")
+    .command("list", { isDefault: true })
     .description("Everything scheduled, and how it last went")
     .action(() => {
       const { db } = openDatabase();
@@ -2812,9 +2838,9 @@ async function main(): Promise<number> {
 
         if (records.length === 0) {
           logger.print("Nothing scheduled. A sensible default:");
-          logger.print("  harbor schedule add sync --every 15");
-          logger.print("  harbor schedule add pipeline --at 06:00");
-          logger.print("  harbor schedule add backup --at 03:00");
+          logger.print("  harbor settings schedule add sync --every 15");
+          logger.print("  harbor settings schedule add pipeline --at 06:00");
+          logger.print("  harbor settings schedule add backup --at 03:00");
           return;
         }
 
@@ -2869,7 +2895,7 @@ async function main(): Promise<number> {
       }
     });
 
-  program
+  dev
     .command("run")
     .argument("<task>", SCHEDULABLE.join(" | "))
     .description("Run a scheduled task once, right now")
@@ -2881,7 +2907,7 @@ async function main(): Promise<number> {
       if (!SCHEDULABLE.includes(task as ScheduledTask)) {
         const elsewhere = ["recent", "history", "backfill", "onboard"].includes(task);
 
-        throw new HarborError(`\`harbor run\` does not know the task ${task}.`, {
+        throw new HarborError(`\`harbor dev run\` does not know the task ${task}.`, {
           code: "usage.unknown_task",
           exitCode: EXIT_CODES.usage,
           hint: elsewhere
@@ -3068,7 +3094,7 @@ async function main(): Promise<number> {
       },
     );
 
-  program
+  dev
     .command("mcp")
     .description("Serve the tool surface over MCP on stdio")
     .action(async () => {
@@ -3081,7 +3107,7 @@ async function main(): Promise<number> {
       }
     });
 
-  program
+  dev
     .command("install-service")
     .description("Write a launchd plist or systemd unit for the daemon")
     .option("--port <port>", "HTTP port", "8484")
@@ -3204,150 +3230,6 @@ async function main(): Promise<number> {
         db.close();
       }
     });
-
-  const actions = program.command("actions").description("Changes waiting on your approval");
-
-  actions
-    .command("list")
-    .option("--all", "include decided ones")
-    .description("What is queued")
-    .action((options: { all?: boolean }) => {
-      const { db } = openDatabase();
-
-      try {
-        const queue = options.all === true ? listActions(db) : listActions(db, "pending");
-
-        if (queue.length === 0) {
-          logger.print("Nothing waiting.");
-          return;
-        }
-
-        for (const entry of queue) {
-          logger.print(`${entry.id}  ${entry.state.padEnd(9)} ${entry.summary}`);
-          logger.print(
-            `           ${entry.action}  requested by ${entry.requestedBy ?? "?"}  ${when(entry.createdAt)}` +
-              (entry.verification === null ? "" : `  verification: ${entry.verification}`),
-          );
-        }
-
-        if (options.all !== true) {
-          logger.print("");
-          logger.print("harbor actions approve <id>   |   harbor actions reject <id>");
-        }
-      } finally {
-        db.close();
-      }
-    });
-
-  actions
-    .command("propose")
-    .argument("<action>", ACTIONS.map((entry) => entry.id).join(" | "))
-    .argument("<json>", "arguments as JSON")
-    .description("Queue a change without performing it")
-    .action((actionId: string, json: string) => {
-      const spec = actionById(actionId);
-
-      if (spec === null) {
-        throw new HarborError(`Unknown action: ${actionId}`, {
-          code: "usage.unknown_action",
-          exitCode: EXIT_CODES.usage,
-          hint: `Known actions: ${ACTIONS.map((entry) => entry.id).join(", ")}`,
-        });
-      }
-
-      const { db } = openDatabase();
-
-      try {
-        const record = propose(db, {
-          principalId: DEFAULT_PRINCIPAL,
-          spec,
-          args: JSON.parse(json) as Record<string, unknown>,
-          requestedBy: "cli",
-        });
-
-        logger.print(`${record.id}  ${record.summary}`);
-        logger.print("");
-        logger.print(`Nothing has happened. Approve with: harbor actions approve ${record.id}`);
-      } finally {
-        db.close();
-      }
-    });
-
-  actions
-    .command("approve")
-    .argument("<id>", "action id")
-    .description("Perform a queued change, then verify it against the source")
-    .action(async (id: string) => {
-      const { db } = openDatabase();
-
-      try {
-        const pending = listActions(db, "pending").find((entry) => entry.id === id);
-
-        if (pending === undefined) {
-          throw new HarborError(`No pending action ${id}`, {
-            code: "precondition.no_action",
-            exitCode: EXIT_CODES.precondition,
-            hint: "See `harbor actions list`.",
-          });
-        }
-
-        const spec = actionById(pending.action);
-
-        if (spec === null) {
-          throw new HarborError(`Unknown action ${pending.action}`, {
-            code: "usage.unknown_action",
-            exitCode: EXIT_CODES.usage,
-          });
-        }
-
-        const account = listAccounts(db, "google")[0];
-
-        if (account === undefined) {
-          throw new HarborError("No connected account", {
-            code: "precondition.no_accounts",
-            exitCode: EXIT_CODES.precondition,
-            hint: "Run `harbor auth google` first.",
-          });
-        }
-
-        logger.print(pending.summary);
-        logger.print("");
-
-        const report = await approveAndExecute(db, id, spec, {
-          token: await accessToken(db, account),
-          accountId: account.id,
-          timezone: tz,
-        });
-
-        logger.print(`State          ${report.action.state}`);
-        logger.print(`Verification   ${report.verification}`);
-        logger.print(`Detail         ${report.detail}`);
-
-        if (report.verification === "failed") {
-          logger.warn(
-            "the source accepted the change but reading it back does not match. " +
-              "Check it by hand; Harbor will not retry on its own.",
-          );
-        }
-      } finally {
-        db.close();
-      }
-    });
-
-  actions
-    .command("reject")
-    .argument("<id>", "action id")
-    .action((id: string) => {
-      const { db } = openDatabase();
-
-      try {
-        reject(db, id);
-        logger.print(`${id} rejected.`);
-      } finally {
-        db.close();
-      }
-    });
-
   program
     .command("setup")
     .description("What is done, and what to do next")
@@ -3391,7 +3273,7 @@ async function main(): Promise<number> {
       }
     });
 
-  program
+  dev
     .command("problems")
     .description("Anything currently wrong")
     .action(() => {
@@ -3783,8 +3665,8 @@ async function main(): Promise<number> {
       }
     });
 
-  program
-    .command("remember")
+  facts
+    .command("add")
     .argument("<statement>", "something durable about you")
     .description("Tell Harbor a standing fact about yourself")
     .option("--kind <kind>", "preference | constraint | relationship | routine | detail")
@@ -3816,8 +3698,8 @@ async function main(): Promise<number> {
       }
     });
 
-  program
-    .command("facts")
+  facts
+    .command("list", { isDefault: true })
     .description("What Harbor knows about you, and what it suspects")
     .option("--proposed", "only the ones waiting on you")
     .option("--rejected", "only the ones you turned down")
@@ -3834,7 +3716,7 @@ async function main(): Promise<number> {
           logger.print(
             state === "proposed"
               ? "Nothing waiting. Run `harbor dev notice` to look through your conversations."
-              : "Nothing yet. Add one with `harbor remember \"...\"`.",
+              : "Nothing yet. Add one with `harbor facts add \"...\"`.",
           );
           return;
         }
@@ -3858,14 +3740,14 @@ async function main(): Promise<number> {
         );
 
         if (counts.proposed > 0 && state === undefined) {
-          logger.print("Only confirmed facts are ever used. `harbor confirm <id>` or `harbor reject <id>`.");
+          logger.print("Only confirmed facts are ever used. `harbor facts confirm <id>` or `harbor facts reject <id>`.");
         }
       } finally {
         db.close();
       }
     });
 
-  program
+  facts
     .command("confirm")
     .argument("<id>", "a fact id")
     .description("Accept something Harbor proposed about you")
@@ -3888,7 +3770,7 @@ async function main(): Promise<number> {
       }
     });
 
-  program
+  facts
     .command("reject")
     .argument("<id>", "a fact id")
     .description("Turn down something Harbor proposed, permanently")
@@ -3913,7 +3795,7 @@ async function main(): Promise<number> {
       }
     });
 
-  program
+  facts
     .command("forget")
     .argument("<id>", "a fact id")
     .description("Delete a fact entirely")
@@ -4050,7 +3932,7 @@ async function main(): Promise<number> {
       }
     });
 
-  program
+  settings
     .command("secrets")
     .description("Where your credentials are stored")
     .option("--move", "move them into the operating system keychain")
@@ -4071,7 +3953,7 @@ async function main(): Promise<number> {
 
           if (backend !== "none") {
             logger.print("");
-            logger.print("Move them with `harbor secrets --move`.");
+            logger.print("Move them with `harbor settings secrets --move`.");
           }
 
           return;

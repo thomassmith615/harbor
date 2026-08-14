@@ -314,7 +314,7 @@ async function* walk(context: SyncContext, cursor: string | null): AsyncGenerato
           ? {
               note:
                 `${String(unreadable)} of ${String(rows.length)} messages had text ` +
-                "Harbor could not read; run `harbor imessage check`",
+                "Harbor could not read; run `harbor dev imessage check`",
             }
           : {}),
       };

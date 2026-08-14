@@ -13,7 +13,6 @@ import { appleContactsConnector } from "./apple/contacts.js";
 import { appleRemindersConnector } from "./apple/reminders.js";
 import { imessageConnector } from "./imessage/messages.js";
 import { imapConnector } from "./imap/mail.js";
-import { actionScopes } from "../actions/registry.js";
 import type { SourceConnector } from "./types.js";
 
 export const CONNECTORS: readonly SourceConnector[] = [
@@ -55,11 +54,8 @@ export function scopesFor(sourceType: string): readonly string[] {
     }
   }
 
-  if (sourceType === "google") {
-    for (const scope of actionScopes()) {
-      scopes.add(scope);
-    }
-  }
+  // Read-only, deliberately. Write actions were removed in M10, and with them
+  // the reason to ask a person for permission to change their calendar.
 
   return [...scopes];
 }

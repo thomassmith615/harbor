@@ -75,7 +75,7 @@ function htmlToText(html: string): string {
  * The parser is imported lazily and its absence is not an error. Harbor should
  * install and run without a PDF dependency, and a mailbox with no PDF receipts
  * should never pay for one. When the module is missing the attachment records
- * that it was skipped, which is visible in `harbor attachments` and fixable
+ * that it was skipped, which is visible in `harbor dev attachments` and fixable
  * with one npm install.
  */
 async function pdfToText(content: Buffer): Promise<{ text: string | null; error: string | null }> {

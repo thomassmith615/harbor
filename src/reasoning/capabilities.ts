@@ -13,7 +13,6 @@
 import { listAccounts } from "../store/accounts.js";
 import { listStreams } from "../store/streams.js";
 import { CONNECTORS } from "../connectors/registry.js";
-import { ACTIONS } from "../actions/registry.js";
 import type { DB } from "../kernel/db.js";
 
 export interface ConnectedSource {
@@ -88,7 +87,7 @@ export const COMMANDS: readonly CommandGroup[] = [
       { command: "harbor auth google", does: "connect Gmail and Google Calendar" },
       { command: "harbor auth apple", does: "connect iCloud Calendar and Contacts with an app-specific password" },
       { command: "harbor auth imessage", does: "read iMessage from this Mac; needs Full Disk Access, no credential" },
-      { command: "harbor calendars", does: "list every calendar Harbor can see" },
+      { command: "harbor dev calendars", does: "list every calendar Harbor can see" },
       { command: "harbor update", does: "pull what changed since last time" },
       { command: "harbor sync --backfill", does: "read everything, resumable" },
     ],
@@ -99,25 +98,25 @@ export const COMMANDS: readonly CommandGroup[] = [
       { command: "harbor dev classify", does: "label how sensitive each item is; no model calls" },
       { command: "harbor dev derive", does: "chunk and embed, so search works on meaning" },
       { command: "harbor dev resolve", does: "work out which addresses are the same person" },
-      { command: "harbor remember <statement>", does: "tell Harbor a standing fact about you" },
+      { command: "harbor facts add <statement>", does: "tell Harbor a standing fact about you" },
       { command: "harbor facts", does: "what Harbor knows about you, and what it suspects" },
       { command: "harbor dev notice", does: "look through conversations for standing facts" },
       { command: "harbor topics", does: "subjects that keep coming up" },
       { command: "harbor doctor", does: "what is broken, what is exposed, and what to run" },
-      { command: "harbor secrets", does: "where credentials are stored, and move them to the keychain" },
+      { command: "harbor settings secrets", does: "where credentials are stored, and move them to the keychain" },
       { command: "harbor backup --encrypt", does: "an encrypted snapshot" },
       { command: "harbor dev extract", does: "pull purchases out of receipts and confirmations" },
       { command: "harbor purchases", does: "what has been bought" },
-      { command: "harbor spend --days 90", does: "spending grouped by merchant" },
-      { command: "harbor attachments", does: "files that arrived with your mail" },
+      { command: "harbor purchases merchants --days 90", does: "spending grouped by merchant" },
+      { command: "harbor dev attachments", does: "files that arrived with your mail" },
       { command: "harbor digest", does: "the few things worth knowing, with a notification" },
-      { command: "harbor weight <account> <n>", does: "how much a source is worth surfacing" },
+      { command: "harbor settings weight <account> <n>", does: "how much a source is worth surfacing" },
       { command: "harbor dev commit", does: "build commitments from reminders, chats, and the calendar" },
       { command: "harbor commitments", does: "what has been said would happen and has not" },
-      { command: "harbor commitment <id>", does: "one commitment and all its evidence" },
+      { command: "harbor commitments show <id>", does: "one commitment and all its evidence" },
       { command: "harbor dev segment", does: "group messages into conversation episodes" },
       { command: "harbor conversations <query>", does: "search conversations rather than single messages" },
-      { command: "harbor conversation <id>", does: "one full transcript" },
+      { command: "harbor conversations show <id>", does: "one full transcript" },
       { command: "harbor reminders", does: "what is still open, by due date" },
       { command: "harbor dev relate", does: "connect items across sources into situations" },
       {
@@ -137,39 +136,39 @@ export const COMMANDS: readonly CommandGroup[] = [
       { command: "harbor ask --trace", does: "show each tool call as it happens" },
       { command: "harbor ask --evidence", does: "list every item the model was shown" },
       { command: "harbor find \"...\"", does: "retrieval directly, with scores and why each matched; no model call" },
-      { command: "harbor chats", does: "recent conversations" },
+      { command: "harbor dev chats", does: "recent conversations" },
     ],
   },
   {
     group: "People",
     commands: [
       { command: "harbor people", does: "who Harbor knows, by how much you have written to them" },
-      { command: "harbor person <name>", does: "one person: addresses, counts, last contact" },
-      { command: "harbor merge <a> <b>", does: "declare two entities the same person" },
-      { command: "harbor rename <id> <name>", does: "correct a name and pin it" },
+      { command: "harbor people show <name>", does: "one person: addresses, counts, last contact" },
+      { command: "harbor people merge <a> <b>", does: "declare two entities the same person" },
+      { command: "harbor people rename <id> <name>", does: "correct a name and pin it" },
     ],
   },
   {
     group: "Noticing things",
     commands: [
-      { command: "harbor interest add \"...\"", does: "tell Harbor what you are working on" },
+      { command: "harbor settings interest add \"...\"", does: "tell Harbor what you are working on" },
       { command: "harbor dev signals", does: "run the detectors over what has been ingested" },
-      { command: "harbor brief", does: "what is worth your attention, at most three things" },
+      { command: "harbor dev brief", does: "what is worth your attention, at most three things" },
       { command: "harbor dismiss <id>", does: "say that was not worth mentioning" },
     ],
   },
   {
     group: "What leaves the machine",
     commands: [
-      { command: "harbor policy list", does: "the egress rules, in the order they are evaluated" },
-      { command: "harbor audit", does: "what was sent to a model, under which rule" },
-      { command: "harbor cost", does: "spend by task class over the last month" },
+      { command: "harbor settings policy list", does: "the egress rules, in the order they are evaluated" },
+      { command: "harbor settings audit", does: "what was sent to a model, under which rule" },
+      { command: "harbor settings cost", does: "spend by task class over the last month" },
     ],
   },
   {
     group: "Running unattended",
     commands: [
-      { command: "harbor schedule add pipeline --at 06:00", does: "run the daily loop by itself" },
+      { command: "harbor settings schedule add pipeline --at 06:00", does: "run the daily loop by itself" },
       { command: "harbor daemon", does: "scheduler plus the local API" },
       { command: "harbor device code", does: "pair a phone or browser" },
       { command: "harbor backup", does: "a consistent snapshot of the store" },
@@ -283,11 +282,11 @@ export function capabilities(db: DB): Capabilities {
     sources,
     allSources: availableSources(db),
     canRead: [...new Set(sources.flatMap((source) => source.reads))],
-    canDo: ACTIONS.map((action) => ({ action: action.id, description: action.description })),
+    canDo: [],
     cannot: [
+      "change anything: Harbor reads, and does not write back to any source",
       "send, delete, or modify email",
       "read anything from a source that has not been connected",
-      "act on anything without the user approving it first",
     ],
     commands: COMMANDS,
   };

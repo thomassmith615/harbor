@@ -13,8 +13,6 @@
 import { createInterface } from "node:readline";
 import { runTool, TOOLS } from "../reasoning/tools.js";
 import { createEmbedder } from "../derive/embed/index.js";
-import { propose } from "../actions/types.js";
-import { ACTIONS, actionById } from "../actions/registry.js";
 import type { DB } from "../kernel/db.js";
 import type { Embedder } from "../derive/embed/index.js";
 
@@ -32,38 +30,6 @@ export interface McpOptions {
   readonly timezone: string;
 }
 
-function proposeToolSchema(): {
-  name: string;
-  description: string;
-  inputSchema: Record<string, unknown>;
-} {
-  return {
-    name: "propose_action",
-    description:
-      "Propose a change to the user's calendar. This does NOT perform it: it queues a " +
-      "proposal that the user must approve with `harbor actions approve <id>`. Always tell " +
-      "the user the proposal id and that it is waiting on them. Available actions: " +
-      ACTIONS.map((action) => `${action.id} (${action.description})`).join("; "),
-    inputSchema: {
-      type: "object",
-      properties: {
-        action: {
-          type: "string",
-          enum: ACTIONS.map((action) => action.id),
-          description: "Which action to propose.",
-        },
-        args: {
-          type: "object",
-          description:
-            "Arguments. create_event: title, start, end (ISO 8601 with offset), optional " +
-            "attendees, location, description. move_event: eventId, start, end. " +
-            "cancel_event: eventId.",
-        },
-      },
-      required: ["action", "args"],
-    },
-  };
-}
 
 export async function serveMcp(db: DB, options: McpOptions): Promise<void> {
   let embedder: Embedder | undefined;
@@ -135,7 +101,6 @@ export async function serveMcp(db: DB, options: McpOptions): Promise<void> {
             description: tool.description,
             inputSchema: tool.input_schema,
           })),
-          proposeToolSchema(),
         ],
       });
       continue;
@@ -151,44 +116,6 @@ export async function serveMcp(db: DB, options: McpOptions): Promise<void> {
       }
 
       try {
-        if (name === "propose_action") {
-          const actionId = args["action"];
-          const spec = typeof actionId === "string" ? actionById(actionId) : null;
-
-          if (spec === null) {
-            fail(request.id, -32602, `unknown action ${String(actionId)}`);
-            continue;
-          }
-
-          const action = propose(db, {
-            principalId: options.principalId,
-            spec,
-            args: (args["args"] ?? {}) as Record<string, unknown>,
-            requestedBy: "mcp",
-          });
-
-          reply(request.id, {
-            content: [
-              {
-                type: "text",
-                text: JSON.stringify(
-                  {
-                    proposed: action.id,
-                    summary: action.summary,
-                    state: "pending",
-                    note:
-                      "Nothing has happened yet. The user must run " +
-                      `\`harbor actions approve ${action.id}\` for this to take effect.`,
-                  },
-                  null,
-                  1,
-                ),
-              },
-            ],
-          });
-          continue;
-        }
-
         const outcome = await runTool(db, context, { name, input: args });
 
         reply(request.id, {

@@ -74,7 +74,7 @@ export async function runTask(
   return started.job === null ? "refused" : `started ${started.job.id}`;
 }
 
-/** The old direct path, kept for `harbor run` where a person is watching. */
+/** The old direct path, kept for `harbor dev run` where a person is watching. */
 export async function runTaskDirectly(
   db: DB,
   task: ScheduledTask,
@@ -210,7 +210,7 @@ export async function runTaskDirectly(
   // The scheduler and the background job runner grew separate task
   // vocabularies, and `SCHEDULABLE` advertises several that only the job
   // runner implements. Rather than duplicate ingest logic here, hand those
-  // straight to it: one implementation, and `harbor run recent` does what its
+  // straight to it: one implementation, and `harbor dev run recent` does what its
   // own help text says it does.
   if (INGEST_TASKS.includes(task)) {
     const outcome = enqueue(

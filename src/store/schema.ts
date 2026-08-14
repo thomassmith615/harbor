@@ -239,7 +239,7 @@ export const MIGRATIONS: readonly string[] = [
   // is built around one rule: an email address is an identity anchor, a name
   // is not. Names attach to entities; they never merge them. Two people called
   // John Smith stay two entities until a shared address or an explicit
-  // `harbor merge` says otherwise.
+  // `harbor people merge` says otherwise.
   //
   // That rule costs recall. The alternative costs correctness, and a personal
   // data system that silently welds two people together produces confident

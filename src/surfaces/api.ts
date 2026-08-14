@@ -38,8 +38,6 @@ import { runTool } from "../reasoning/tools.js";
 import { humanWhen, localIso } from "../kernel/time.js";
 import { authenticate, listDevices, revokeDevice } from "../store/devices.js";
 import { issueCode, redeem } from "../store/pairing.js";
-import { approveAndExecute, listActions, propose, reject } from "../actions/types.js";
-import { ACTIONS, actionById } from "../actions/registry.js";
 import { credentialFor } from "../connectors/dispatch.js";
 import { CONNECTORS } from "../connectors/registry.js";
 import { listStreams } from "../store/streams.js";
@@ -161,7 +159,6 @@ const missing = (message = "not found"): Reply => ({ status: 404, body: { error:
  * where it expected a 401 and has no idea it needs to pair.
  */
 const API_PREFIXES: readonly string[] = [
-  "actions",
   "ask",
   "audit",
   "about",
@@ -1040,80 +1037,6 @@ async function route(
     if (method === "DELETE" && segments[1] !== undefined) {
       setInterestState(db, segments[1], "dismissed");
       return ok({ id: segments[1], state: "dismissed" });
-    }
-  }
-
-  // ---- actions ----
-
-  if (head === "actions") {
-    if (method === "GET") {
-      return ok({
-        available: ACTIONS.map((action) => ({ id: action.id, description: action.description })),
-        pending: listActions(db, "pending"),
-      });
-    }
-
-    if (!writable) {
-      return { status: 403, body: { error: "this device may not act" } };
-    }
-
-    if (method === "POST" && segments.length === 1) {
-      const actionId = body["action"];
-      const spec = typeof actionId === "string" ? actionById(actionId) : null;
-
-      if (spec === null) {
-        return bad(`unknown action ${String(actionId)}`);
-      }
-
-      const record = propose(db, {
-        principalId: device.principalId,
-        spec,
-        args: (body["args"] ?? {}) as Record<string, unknown>,
-        requestedBy: device.id,
-      });
-
-      return ok({ action: record, note: "queued; nothing has happened yet" });
-    }
-
-    if (method === "POST" && segments[1] !== undefined && segments[2] === "reject") {
-      reject(db, segments[1]);
-      return ok({ id: segments[1], state: "rejected" });
-    }
-
-    if (method === "POST" && segments[1] !== undefined && segments[2] === "approve") {
-      const id = segments[1];
-      const pending = listActions(db, "pending").find((entry) => entry.id === id);
-
-      if (pending === undefined) {
-        return missing(`no pending action ${id}`);
-      }
-
-      const spec = actionById(pending.action);
-
-      if (spec === null) {
-        return bad(`unknown action ${pending.action}`);
-      }
-
-      const account = listAccounts(db, "google")[0];
-
-      if (account === undefined) {
-        return bad("no connected Google account");
-      }
-
-      const credential = await credentialFor(db, account);
-
-      const report = await approveAndExecute(db, id, spec, {
-        token: credential.token,
-        accountId: account.id,
-        timezone: options.timezone,
-      });
-
-      return ok({
-        id,
-        state: report.action.state,
-        verification: report.verification,
-        detail: report.detail,
-      });
     }
   }
 
