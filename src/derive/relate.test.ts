@@ -252,6 +252,44 @@ describe("the failures from the first real run", () => {
     assert.ok(connected(task, dentist), "a reminder lost its connection to the mail it covers");
   });
 
+  test("mail that arrived once and was never replied to is still one-way", () => {
+    // The volume floor let this through: a sweepstakes blast from a fresh
+    // address arrives once, so it never reached the three-message threshold,
+    // and it shares "wildwood" with a real conversation.
+    const spam: NodeRef = { kind: "item", id: itemFor("mail-sweepstakes") };
+
+    assert.equal(
+      edgesFor(store.db, spam).length,
+      0,
+      "a one-off sweepstakes email was linked into the graph",
+    );
+  });
+
+  test("a recurring reminder counts once, not once per occurrence", () => {
+    // Four instances of "rehearsal speech write ~5min" made a seventeen-thing
+    // situation that was really about six things.
+    const later: NodeRef = { kind: "item", id: itemFor("task-speech-2") };
+
+    assert.equal(
+      edgesFor(store.db, later).length,
+      0,
+      "a repeat occurrence of a recurring reminder became its own node",
+    );
+  });
+
+  test("one shared word two months apart is coincidence", () => {
+    // `tracks` refused this pair on the gap and `about_same` drew it anyway,
+    // because it had no notion of time at all.
+    const task: NodeRef = { kind: "item", id: itemFor("task-gauge") };
+    const chat = episodeFor("msg-gauge");
+
+    assert.equal(
+      connected(task, chat),
+      false,
+      "a single word shared across two months was treated as evidence",
+    );
+  });
+
   test("a hostname is not a distinctive word", () => {
     // "amazonaws" was among the rarest-looking words in the store, because it
     // is in the tracking pixel at the bottom of thousands of marketing emails.

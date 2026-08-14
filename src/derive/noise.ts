@@ -39,12 +39,19 @@ import type { DB } from "../kernel/db.js";
 const RECURRENCE_THRESHOLD = 5;
 
 /**
- * How much one-way mail a sender must send before silence means broadcast.
+ * Recurring reminders are one commitment, not one per occurrence.
  *
- * Three. Below that, "you never replied" is more likely to mean you had nothing
- * to say than that nobody was talking to you.
+ * A daily reminder is a separate item per day, which is correct in the store
+ * and wrong in a graph: "reading terminal rehearsal dinner" came back as a
+ * seventeen-thing situation containing "rehearsal speech write ~5min" four
+ * times. Every instance is real and the repetition carries no information, so
+ * one instance stands for the set and the rest are excluded.
+ *
+ * The earliest is kept rather than the nearest, because it does not move as new
+ * occurrences arrive and a situation that silently re-forms under a different
+ * id every morning is worse than one that is slightly stale.
  */
-const BROADCAST_THRESHOLD = 3;
+const DUPLICATE_TASK_THRESHOLD = 2;
 
 /** Senders that announce themselves. Cheap, and catches the first message. */
 const NO_REPLY =
@@ -72,6 +79,7 @@ function localPart(author: string): string {
 }
 
 export interface NoiseReport {
+  readonly repeatedTasks: number;
   readonly templateShapes: number;
   readonly templateItems: number;
   readonly broadcastSenders: number;
@@ -82,6 +90,7 @@ export interface NoiseReport {
 export class NoiseIndex {
   private readonly templates = new Set<string>();
   private readonly broadcasts = new Set<string>();
+  private readonly repeats = new Set<string>();
   private templateShapes = 0;
   private broadcastSenders = 0;
 
@@ -168,10 +177,19 @@ export class NoiseIndex {
     }
 
     for (const [address, ids] of senders) {
-      const announced = NO_REPLY.test(localPart(address));
-      const oneWay = !replied.has(address) && ids.length >= BROADCAST_THRESHOLD;
+      // No volume floor.
+      //
+      // The first version required three or more messages before silence
+      // counted, reasoning that below that "you never replied" might just mean
+      // you had nothing to say. That reasoning is about a person and this test
+      // is about an address. Spam uses a fresh address every time, which is
+      // exactly why a volume floor let it through: PCH sweepstakes, a Vegas
+      // fall-break blast, and a terms-and-conditions notice all arrived once
+      // and all formed situations. An address you have never written to is
+      // broadcasting, whether it has said one thing or a hundred.
+      const oneWay = !replied.has(address) || NO_REPLY.test(localPart(address));
 
-      if (!announced && !oneWay) {
+      if (!oneWay) {
         continue;
       }
 
@@ -181,11 +199,43 @@ export class NoiseIndex {
         this.broadcasts.add(id);
       }
     }
+
+    const tasks = db
+      .prepare(
+        `SELECT id, stream_id, title FROM items
+         WHERE deleted_at IS NULL AND kind = 'task' AND title IS NOT NULL
+         ORDER BY occurred_at ASC`,
+      )
+      .all() as { id: string; stream_id: string; title: string }[];
+
+    const byTitle = new Map<string, string[]>();
+
+    for (const task of tasks) {
+      const key = `${task.stream_id}|${task.title.toLowerCase().trim()}`;
+      const seen = byTitle.get(key);
+
+      if (seen === undefined) {
+        byTitle.set(key, [task.id]);
+      } else {
+        seen.push(task.id);
+      }
+    }
+
+    for (const ids of byTitle.values()) {
+      if (ids.length < DUPLICATE_TASK_THRESHOLD) {
+        continue;
+      }
+
+      // Ordered by time above, so index zero is the earliest.
+      for (const id of ids.slice(1)) {
+        this.repeats.add(id);
+      }
+    }
   }
 
-  /** A recurring notification. Not a graph node at all. */
+  /** A recurring notification, or a repeat of a reminder. Not a graph node. */
   isTemplate(itemId: string): boolean {
-    return this.templates.has(itemId);
+    return this.templates.has(itemId) || this.repeats.has(itemId);
   }
 
   /** One-way mail. May be linked by reference or by a reminder, never by a word. */
@@ -195,11 +245,12 @@ export class NoiseIndex {
 
   /** Items that need no graph work at all. */
   get templateIds(): readonly string[] {
-    return [...this.templates];
+    return [...this.templates, ...this.repeats];
   }
 
   report(): NoiseReport {
     return {
+      repeatedTasks: this.repeats.size,
       templateShapes: this.templateShapes,
       templateItems: this.templates.size,
       broadcastSenders: this.broadcastSenders,

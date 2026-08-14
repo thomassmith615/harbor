@@ -1,6 +1,6 @@
 {
   "name": "harbor",
-  "version": "0.33.0",
+  "version": "0.34.0",
   "description": "Local-first personal intelligence appliance. Messages, mail, calendars, and reminders, connected and reasoned over on your own machine.",
   "type": "module",
   "private": true,

@@ -379,6 +379,12 @@ function isStrongOverlap(words: readonly string[], terms: TermIndex): boolean {
  * sender, which the thread already covers and which nobody needs Harbor for.
  * Across sources it means the thing Harbor exists to notice.
  */
+/** How far apart the content generator reaches. Mirrors candidates.ts. */
+const CONTENT_SPAN_MS = 60 * 86_400_000;
+
+/** Beyond this, one shared word is coincidence rather than evidence. */
+const SINGLE_WORD_SPAN_MS = 30 * 86_400_000;
+
 const aboutSame: PairLinker = {
   id: "about_same",
   judge(subject, candidate, context) {
@@ -402,10 +408,32 @@ const aboutSame: PairLinker = {
       };
     }
 
+    // Time matters, and it did not before.
+    //
+    // `tracks` refuses a reminder and a message 57 days apart, and this linker
+    // drew the same pair on one shared word because it had no notion of a gap
+    // at all. A word shared four days apart is two people discussing one thing;
+    // the same word two months apart is usually the same word.
+    const gap = Math.abs(
+      (subject.endsAt ?? subject.occurredAt) - candidate.node.occurredAt,
+    );
+
+    if (words.length === 1 && gap > SINGLE_WORD_SPAN_MS) {
+      return {
+        rejected: `only "${words[0] ?? ""}" in common and ${describeGap(gap)} apart`,
+      };
+    }
+
     // Rarer words are better evidence, and this is the only place the weights
     // are used for anything: they scale confidence, they never rank.
     const weight = words.reduce((total, word) => total + context.terms.weight(word), 0);
-    const confidence = Math.min(0.8, 0.4 + weight / 30);
+    // Gentle on purpose. The hard rule above is what does the real work; this
+    // only orders things. A first attempt multiplied confidence by the full
+    // fraction of the window used, which cost a genuine 28-day link about half
+    // its score and dropped it below the bar for forming a situation. Distance
+    // makes an edge weaker, not wrong.
+    const nearness = Math.max(0.8, 1 - gap / CONTENT_SPAN_MS / 5);
+    const confidence = Math.min(0.8, 0.4 + weight / 30) * nearness;
 
     return {
       edge: {
@@ -413,7 +441,9 @@ const aboutSame: PairLinker = {
         to: candidate.node.ref,
         kind: "about_same",
         confidence: Number(confidence.toFixed(2)),
-        evidence: `both mention ${words.slice(0, 4).join(", ")}, from different sources`,
+        evidence:
+          `both mention ${words.slice(0, 4).join(", ")}, from different sources` +
+          (gap > 7 * 86_400_000 ? `, ${describeGap(gap)} apart` : ""),
         detector: "about_same",
       },
     };

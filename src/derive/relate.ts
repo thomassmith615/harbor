@@ -193,6 +193,13 @@ export function relate(db: DB, options: RelateOptions): RelateReport {
   dismissItems(db, noise.templateIds, RELATIONSHIP_VERSION);
   const noiseReport = noise.report();
 
+  if (noiseReport.repeatedTasks > 0) {
+    options.onNote?.(
+      `${String(noiseReport.repeatedTasks)} repeat occurrences of recurring reminders ` +
+        "are represented by their first instance",
+    );
+  }
+
   if (noiseReport.templateItems > 0) {
     options.onNote?.(
       `${String(noiseReport.templateItems)} items across ` +

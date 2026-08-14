@@ -356,6 +356,60 @@ const SEEDS: readonly Seed[] = [
     at: NOW - 24 * DAY,
   },
 
+  // ---- one-off spam: arrived once, never replied to, must not link ----
+  //
+  // This is what a volume floor let through. The first broadcast test required
+  // three messages from a sender before silence counted, and a sweepstakes
+  // blast that arrives once from a fresh address never reaches three.
+  {
+    stream: "imap",
+    externalId: "mail-sweepstakes",
+    kind: "message",
+    direction: "inbound",
+    threadId: "thread-sweepstakes",
+    title: "Will YOU become a millionaire? Wildwood getaway included",
+    body: "Claim your prize now. A Wildwood getaway could be yours this August.",
+    author: "prizes@sweepstakes-once.test",
+    participants: ["me@comcast.net"],
+    at: NOW - 18 * DAY,
+  },
+
+  // ---- a recurring reminder: one commitment, not four things ----
+  ...Array.from({ length: 4 }, (_, index) => ({
+    stream: "apple-reminders",
+    externalId: `task-speech-${String(index)}`,
+    kind: "task",
+    title: "rehearsal speech write ~5min",
+    body: null,
+    participants: [] as readonly string[],
+    at: NOW - (14 - index) * DAY,
+    state: "open",
+  })),
+
+  // ---- a word shared across two months, which is coincidence ----
+  {
+    stream: "apple-reminders",
+    externalId: "task-gauge",
+    kind: "task",
+    title: "WATER GAUGE PIC",
+    body: null,
+    participants: [],
+    at: NOW - 3 * DAY,
+    state: "open",
+  },
+  {
+    stream: "imessage",
+    externalId: "msg-gauge",
+    kind: "message",
+    direction: "inbound",
+    threadId: "chat-gauge",
+    title: "+15551230015",
+    body: "the gauge on the tank was reading low again",
+    author: "+15551230015",
+    participants: ["+15551230015"],
+    at: NOW - 60 * DAY,
+  },
+
   // ---- noise: must not connect to anything ----
   {
     stream: "imap",

@@ -123,6 +123,51 @@ function loadFacts(db: DB): Map<string, NodeFacts> {
   return facts;
 }
 
+/**
+ * Turns handles in a title into the names Harbor already knows.
+ *
+ * A conversation's title is whatever the source called it, which for iMessage
+ * is a phone number or a list of them. Four of the situations on a real run
+ * were named things like `+13392047146`, and Harbor had 2,750 identifiers and
+ * 1,403 resolved people at the time: it knew perfectly well that was Isabella
+ * and printed the digits anyway.
+ *
+ * Only display. Nothing here is stored, and the underlying handles are
+ * untouched, so a rename in Contacts shows up on the next pass without any
+ * migration.
+ */
+function nameHandles(db: DB, title: string): string {
+  const lookup = db.prepare(
+    `SELECT e.display_name AS name FROM identifiers i
+     JOIN entities e ON e.id = i.entity_id
+     WHERE i.normalized = ? AND e.merged_into IS NULL
+     LIMIT 1`,
+  );
+
+  const named = title.split(",").map((part) => {
+    const handle = part.trim();
+
+    if (!/^\+?\d[\d\s()-]{6,}$/.test(handle)) {
+      return handle;
+    }
+
+    const row = lookup.get(handle.replace(/[^\d+]/g, "")) as { name: string } | undefined;
+
+    if (row === undefined || row.name.includes("@") || /^\+?\d/.test(row.name)) {
+      return handle;
+    }
+
+    return row.name;
+  });
+
+  // Three names and a count reads; eight names and a count does not.
+  if (named.length > 3) {
+    return `${named.slice(0, 3).join(", ")} and ${String(named.length - 3)} others`;
+  }
+
+  return named.join(", ");
+}
+
 export function buildThreads(db: DB, principalId: string): ThreadReport {
   clearThreads(db);
 
@@ -243,7 +288,7 @@ export function buildThreads(db: DB, principalId: string): ThreadReport {
 
     saveThread(db, {
       principalId,
-      title: titleFor(nodes),
+      title: titleFor(db, nodes),
       kind: [...kinds].sort().join("+"),
       nodes: nodes.map((node) => node.ref),
       startsAt: first.occurredAt,
@@ -267,7 +312,7 @@ export function buildThreads(db: DB, principalId: string): ThreadReport {
  * looks like it wants one and produces a plausible label that outruns the
  * evidence.
  */
-function titleFor(nodes: readonly NodeFacts[]): string | null {
+function titleFor(db: DB, nodes: readonly NodeFacts[]): string | null {
   for (const wanted of ["event", "task"]) {
     const found = nodes.find((node) => node.kind === wanted && (node.title ?? "").length > 2);
 
@@ -276,11 +321,19 @@ function titleFor(nodes: readonly NodeFacts[]): string | null {
     }
   }
 
+  // A subject line beats a handle, whatever order the nodes are in: "crabbing"
+  // says what the situation is and "+13392047146" makes you go and look.
   const titled = nodes.find(
     (node) => (node.title ?? "").length > 3 && !/^\+?\d[\d\s()-]{6,}$/.test(node.title ?? ""),
   );
 
-  return titled?.title ?? null;
+  if (titled !== undefined) {
+    return titled.title;
+  }
+
+  const anyTitle = nodes.find((node) => (node.title ?? "").length > 0);
+
+  return anyTitle === undefined ? null : nameHandles(db, anyTitle.title ?? "");
 }
 
 /**
