@@ -19,7 +19,9 @@
  * plausible it reads.
  */
 
-export const PURCHASE_SCHEMA_VERSION = 1;
+import { trustSender } from "./merchants.js";
+
+export const PURCHASE_SCHEMA_VERSION = 2;
 
 /**
  * Words that make an email look like a receipt.
@@ -77,6 +79,13 @@ export function looksLikePurchase(input: PurchaseCandidateInput): boolean {
   // real receipt is much lower than the cost of a spending total that includes
   // things nobody bought.
   if (NOT_A_RECEIPT.test(text)) {
+    return false;
+  }
+
+  // Who sent it, before what it says. The content of an invoice scam is a
+  // convincing receipt by construction, because that is the whole craft; the
+  // envelope is the part the sender cannot fake.
+  if (!trustSender(input.author).trusted) {
     return false;
   }
 
@@ -191,15 +200,23 @@ export function verifyPurchase(raw: unknown, sourceText: string): PurchaseVerdic
       unit: typeof line["unit"] === "string" ? line["unit"] : null,
       amountCents: toCents(line["amount"]),
     }))
-    .filter((line) => line.description.length > 0);
+    // A line item with no amount is a name, not a price.
+    //
+    // Real output included "Cheesesteak 0.00", "Uber Delivery 0.00", and one
+    // item called "...". The model finds the descriptions and loses the
+    // numbers, and a zero is not a missing value: printed next to a total it
+    // reads as free.
+    .filter((line) => line.description.length > 0 && line.description !== "...")
+    .map((line) => ({ ...line, amountCents: line.amountCents === 0 ? null : line.amountCents }));
 
-  const lineSum = lines.reduce((sum, line) => sum + (line.amountCents ?? 0), 0);
+  const priced = lines.filter((line) => line.amountCents !== null);
+  const lineSum = priced.reduce((sum, line) => sum + (line.amountCents ?? 0), 0);
 
   // Only checked when the itemization is complete enough to mean something.
   // Tax, shipping, and discounts all live outside the line items, so the
   // tolerance is deliberately loose: this catches a parse that went wrong, not
   // a receipt that has a delivery fee.
-  if (lines.length > 1 && lineSum > 0 && (lineSum > totalCents * 1.5 || lineSum < totalCents * 0.4)) {
+  if (priced.length > 1 && lineSum > 0 && (lineSum > totalCents * 1.5 || lineSum < totalCents * 0.4)) {
     return {
       purchase: null,
       rejected: `line items sum to ${(lineSum / 100).toFixed(2)} against a total of ${(totalCents / 100).toFixed(2)}`,

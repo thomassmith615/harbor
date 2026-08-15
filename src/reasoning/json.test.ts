@@ -155,3 +155,22 @@ describe("the model cache", () => {
     }
   });
 });
+
+describe("invalid escapes", () => {
+  test("a stray backslash before a currency symbol is recovered", () => {
+    // "Bad escaped character at position 34" from a real run. A lexical fault
+    // with no effect on meaning, so dropping the backslash cannot invent a
+    // value.
+    const result = recoverJson('{"merchant":"Bob\\\'s","note":"total \\$42.17"}');
+
+    assert.equal(result.error, null);
+    assert.deepEqual(result.value, { merchant: "Bob's", note: "total $42.17" });
+  });
+
+  test("a valid escape is left alone", () => {
+    const result = recoverJson('{"note":"line\\nbreak","path":"a\\\\b"}');
+
+    assert.equal(result.error, null);
+    assert.deepEqual(result.value, { note: "line\nbreak", path: "a\\b" });
+  });
+});

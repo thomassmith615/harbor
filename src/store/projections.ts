@@ -17,6 +17,7 @@
  * one lookup away, and re-deriving after a fixed extractor is a matter of
  * clearing the version column, exactly as every other derived layer works.
  */
+import { displayMerchant, merchantKey, sameMerchant } from "../projections/merchants.js";
 import { createHash } from "node:crypto";
 import type { DB } from "../kernel/db.js";
 
@@ -243,38 +244,124 @@ export interface SpendRow {
  * could not read an amount from should make a sum smaller by being absent, not
  * silently correct-looking by being nothing.
  */
+/**
+ * The same purchase, arriving twice.
+ *
+ * An order confirmation and then a receipt with tax: PGA TOUR Superstore,
+ * "LM1 Launch Monitor", $199.99 at midnight and $211.99 at nine the next
+ * morning. Two emails, one launch monitor, and a spending report that says you
+ * bought two.
+ *
+ * The later record wins, because it is the one with tax and shipping on it. The
+ * window is a day and a half, which covers overnight confirmations without
+ * merging a Tuesday coffee into a Wednesday one, and totals must be within a
+ * quarter of each other so a genuine repeat order at the same price is still
+ * two purchases only when it is far enough apart in time.
+ */
+const DUPLICATE_WINDOW_MS = 36 * 3_600_000;
+
+export function dedupePurchases(
+  rows: readonly { merchant: string | null; occurredAt: number; totalCents: number | null }[],
+): readonly number[] {
+  const keep: number[] = [];
+  const chosen: { merchant: string; at: number; cents: number }[] = [];
+
+  // Newest first, so the survivor of a pair is the later, richer record.
+  const order = rows
+    .map((row, index) => ({ row, index }))
+    .sort((a, b) => b.row.occurredAt - a.row.occurredAt);
+
+  for (const { row, index } of order) {
+    if (row.merchant === null || row.totalCents === null) {
+      keep.push(index);
+      continue;
+    }
+
+    const duplicate = chosen.some(
+      (entry) =>
+        sameMerchant(entry.merchant, row.merchant ?? "") &&
+        Math.abs(entry.at - row.occurredAt) <= DUPLICATE_WINDOW_MS &&
+        Math.abs(entry.cents - (row.totalCents ?? 0)) <= Math.max(entry.cents, 1) * 0.25,
+    );
+
+    if (duplicate) {
+      continue;
+    }
+
+    chosen.push({ merchant: row.merchant, at: row.occurredAt, cents: row.totalCents });
+    keep.push(index);
+  }
+
+  return keep.sort((a, b) => a - b);
+}
+
 export function spendByMerchant(
   db: DB,
   principalId: string,
   since: number,
   until: number,
 ): readonly SpendRow[] {
+  // Grouped here rather than in SQL, because "the same merchant" is not string
+  // equality. `GEEKSQUAD` and `GEEK SQUAD` were separate rows, and so were
+  // three spellings of one pizza place, one of them truncated by a column
+  // width. Spending by merchant is the entire point of this function and it was
+  // splitting the answer three ways.
   const rows = db
     .prepare(
-      `SELECT COALESCE(merchant, 'unknown') AS merchant,
-              COUNT(*) AS count,
-              SUM(total_cents) AS total,
-              MAX(currency) AS currency
+      `SELECT merchant, occurred_at AS occurredAt, total_cents AS totalCents, currency
        FROM projections
        WHERE principal_id = @principal AND type = 'purchase'
          AND total_cents IS NOT NULL
          AND occurred_at BETWEEN @since AND @until
-       GROUP BY COALESCE(merchant, 'unknown')
-       ORDER BY total DESC`,
+       ORDER BY occurred_at DESC`,
     )
     .all({ principal: principalId, since, until }) as {
-    merchant: string;
-    count: number;
-    total: number;
+    merchant: string | null;
+    occurredAt: number;
+    totalCents: number;
     currency: string | null;
   }[];
 
-  return rows.map((row) => ({
-    merchant: row.merchant,
-    count: row.count,
-    totalCents: row.total,
-    currency: row.currency,
-  }));
+  const kept = new Set(dedupePurchases(rows));
+
+  const groups = new Map<
+    string,
+    { names: string[]; count: number; total: number; currency: string | null }
+  >();
+
+  for (const [index, row] of rows.entries()) {
+    if (!kept.has(index)) {
+      continue;
+    }
+
+    const name = row.merchant ?? "unknown";
+    const key = row.merchant === null ? "unknown" : merchantKey(row.merchant);
+    const existing = groups.get(key);
+
+    if (existing === undefined) {
+      groups.set(key, {
+        names: [name],
+        count: 1,
+        total: row.totalCents,
+        currency: row.currency,
+      });
+      continue;
+    }
+
+    existing.names.push(name);
+    existing.count += 1;
+    existing.total += row.totalCents;
+    existing.currency = existing.currency ?? row.currency;
+  }
+
+  return [...groups.values()]
+    .map((group) => ({
+      merchant: displayMerchant(group.names),
+      count: group.count,
+      totalCents: group.total,
+      currency: group.currency,
+    }))
+    .sort((a, b) => b.totalCents - a.totalCents);
 }
 
 export function countProjections(db: DB, type: string): number {

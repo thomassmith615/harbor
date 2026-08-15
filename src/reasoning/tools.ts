@@ -45,7 +45,7 @@ import type { NodeRef, NodeSummary } from "../store/nodes.js";
 import { episodeForItem, episodeItems, getEpisode } from "../store/episodes.js";
 import { searchEpisodes } from "../retrieval/episodes.js";
 import { evidenceFor, listCommitments } from "../store/commitments.js";
-import { linesFor, listProjections, spendByMerchant } from "../store/projections.js";
+import { dedupePurchases, linesFor, listProjections, spendByMerchant } from "../store/projections.js";
 import { capabilities, connectedSources } from "./capabilities.js";
 import { Gate, withholdingNotice } from "../policy/gate.js";
 import type { Embedder } from "../derive/embed/index.js";
@@ -584,7 +584,13 @@ export async function runTool(
       limit: typeof call.input["limit"] === "number" ? call.input["limit"] : 20,
     });
 
-    const described = found.map((purchase) => ({
+    // The same deduplication the CLI applies. A model asked "what did I spend
+    // at the golf store" should not be handed one launch monitor twice and left
+    // to work out that the order confirmation and the receipt are one purchase.
+    const described = dedupePurchases(found)
+      .map((index) => found[index])
+      .filter((purchase): purchase is (typeof found)[number] => purchase !== undefined)
+      .map((purchase) => ({
       merchant: purchase.merchant,
       total: purchase.totalCents === null ? null : purchase.totalCents / 100,
       currency: purchase.currency,

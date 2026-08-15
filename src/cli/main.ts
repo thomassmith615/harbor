@@ -34,7 +34,7 @@ import { buildCommitments, intentCandidates } from "../derive/commitments.js";
 import { latestDigest, produceDigest, recentDigests } from "../derive/digest.js";
 import { extractPurchases, purchaseCandidates } from "../derive/extract.js";
 import { attachmentSummary, attachmentsFor } from "../store/attachments.js";
-import { linesFor, listProjections, spendByMerchant } from "../store/projections.js";
+import { dedupePurchases, linesFor, listProjections, spendByMerchant } from "../store/projections.js";
 import {
   countCommitments,
   evidenceFor,
@@ -1201,11 +1201,12 @@ async function main(): Promise<number> {
 
   purchases
     .command("list", { isDefault: true })
+    .option("--transfers", "money moved rather than spent: brokerages, cards, peer-to-peer")
     .description("What has been bought, most recent first")
     .option("--days <count>", "how far back, default 90")
     .option("--merchant <name>", "narrow to one merchant")
     .option("-n, --limit <count>", "how many, default 30")
-    .action((options: { days?: string; merchant?: string; limit?: string }) => {
+    .action((options: { days?: string; merchant?: string; limit?: string; transfers?: boolean }) => {
       const { db } = openDatabase();
 
       try {
@@ -1214,18 +1215,26 @@ async function main(): Promise<number> {
 
         const found = listProjections(db, {
           principalId: DEFAULT_PRINCIPAL,
-          type: "purchase",
+          type: options.transfers === true ? "transfer" : "purchase",
           since: Date.now() - (Number.isFinite(days) ? days : 90) * 86_400_000,
           ...(options.merchant === undefined ? {} : { merchant: options.merchant }),
-          limit: Number.isFinite(limit) ? limit : 30,
+          // Asked for more than will be shown, because duplicates are removed
+          // after the query and a page of thirty that loses six is a short page.
+          limit: (Number.isFinite(limit) ? limit : 30) * 2,
         });
+
+        const shown = dedupePurchases(found).map((index) => found[index]);
 
         if (found.length === 0) {
           logger.print("No purchases. Run `harbor dev extract --dry-run` to see what would be read.");
           return;
         }
 
-        for (const purchase of found) {
+        for (const purchase of shown.slice(0, Number.isFinite(limit) ? limit : 30)) {
+          if (purchase === undefined) {
+            continue;
+          }
+
           const amount =
             purchase.totalCents === null
               ? "        "

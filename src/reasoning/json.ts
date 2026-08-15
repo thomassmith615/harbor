@@ -147,6 +147,29 @@ export function recoverJson(raw: string): JsonRecovery {
 
   try {
     return { value: JSON.parse(object), repaired, error: null };
+  } catch {
+    // One more attempt, for invalid escapes only.
+    //
+    // "Bad escaped character at position 34" is a model writing `\$` or `\%`
+    // inside a string, which JSON does not allow. It is a lexical fault with no
+    // effect on meaning: dropping the backslash recovers the intended text and
+    // cannot invent a value, which is the line this file will not cross.
+    const unescaped = object.replace(/\\([^"\\/bfnrtu])/g, "$1");
+
+    if (unescaped !== object) {
+      try {
+        const value = JSON.parse(unescaped);
+        repaired.push("invalid escape");
+
+        return { value, repaired, error: null };
+      } catch {
+        // Genuinely malformed. Fall through and report it.
+      }
+    }
+  }
+
+  try {
+    return { value: JSON.parse(object), repaired, error: null };
   } catch (error) {
     return {
       value: null,

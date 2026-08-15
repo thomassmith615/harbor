@@ -21,6 +21,7 @@ import {
 import { attachmentTextFor } from "../store/attachments.js";
 import { saveProjection } from "../store/projections.js";
 import { recoverJson } from "../reasoning/json.js";
+import { isTransfer } from "../projections/merchants.js";
 import { route } from "../reasoning/router.js";
 import { DEFAULT_PRINCIPAL } from "../store/schema.js";
 import type { DB } from "../kernel/db.js";
@@ -288,7 +289,14 @@ export async function extractPurchases(
     saveProjection(db, {
       principalId,
       itemId: candidate.id,
-      type: "purchase",
+      // Money that moved is not money spent.
+      //
+      // A brokerage transfer, a card payment, and a peer-to-peer send are all
+      // real and none of them are purchases. On a real report they were $2,600
+      // of a $4,885 total, which makes every other number in it meaningless.
+      // Recorded under their own type rather than discarded: "$1,522 to
+      // Robinhood on June 15" is worth keeping, it just is not spending.
+      type: isTransfer(verdict.purchase.merchant) ? "transfer" : "purchase",
       schemaVersion: PURCHASE_SCHEMA_VERSION,
       // The stated date when there is one, otherwise when the mail arrived. A
       // receipt usually arrives the same day, and a wrong date is worse than an
