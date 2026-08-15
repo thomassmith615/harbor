@@ -385,3 +385,24 @@ describe("the fixture store itself", () => {
     }
   });
 });
+
+describe("test isolation", () => {
+  test("a test store never uses the real keychain namespace", async () => {
+    // The bug this exists to prevent, and it was not hypothetical: the
+    // encryption tests below encrypt a temp store and save the key they
+    // generated. The keychain is machine-wide, so that write landed on the
+    // developer's own store key and locked them out of 237 MB of their own
+    // mail. Three times.
+    const { keychainService } = await import("../kernel/keychain.js");
+
+    assert.notEqual(
+      keychainService(),
+      "harbor",
+      "a test store is using the production keychain namespace",
+    );
+    assert.ok(
+      keychainService().startsWith("harbor:"),
+      `unexpected namespace: ${keychainService()}`,
+    );
+  });
+});

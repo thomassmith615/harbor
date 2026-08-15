@@ -18,7 +18,7 @@
  */
 import { createHash } from "node:crypto";
 import { anthropicProvider } from "./provider.js";
-import { localProvider } from "./local.js";
+import { localModelFor, localProvider } from "./local.js";
 import { costMicros, taskClass, TIERS } from "./tasks.js";
 import { record } from "../store/audit.js";
 import type { DB } from "../kernel/db.js";
@@ -42,13 +42,13 @@ const LADDER: readonly TierSpec[] = [
     tier: "local_small",
     capabilities: ["json"],
     local: true,
-    create: () => localProvider(process.env["HARBOR_LOCAL_SMALL"] ?? "qwen3:4b"),
+    create: () => localProvider(localModelFor("small")),
   },
   {
     tier: "local_large",
     capabilities: ["json", "long_context"],
     local: true,
-    create: () => localProvider(process.env["HARBOR_LOCAL_LARGE"] ?? "qwen3:14b"),
+    create: () => localProvider(localModelFor("large")),
   },
   {
     tier: "cloud_cheap",
@@ -133,13 +133,64 @@ export function chooseTier(db: DB, task: TaskClass): Tier {
   return "cloud_premium";
 }
 
-function cacheKey(taskClassId: string, request: CompletionRequest, version: number): string {
+/**
+ * What makes two calls the same call.
+ *
+ * The model belongs in here, and its absence was expensive. Fifty extractions
+ * against a model that returned nothing were cached, and switching models
+ * replayed all fifty from cache in under a second: same failures, same reported
+ * model name, one request in the server log, and no way to tell from the output
+ * that nothing had actually run.
+ *
+ * A cached answer is an answer from a particular model. Change the model and it
+ * is a different question.
+ */
+function cacheKey(
+  taskClassId: string,
+  request: CompletionRequest,
+  version: number,
+  model: string,
+): string {
   return createHash("sha256")
     .update(
-      JSON.stringify([taskClassId, version, request.system ?? "", request.messages]),
+      JSON.stringify([taskClassId, version, model, request.system ?? "", request.messages]),
     )
     .digest("hex")
     .slice(0, 32);
+}
+
+/**
+ * Whether a response is worth remembering.
+ *
+ * An empty completion is not a result, it is a failure that happened to return
+ * 200, and caching one turns a transient problem into a permanent one. That is
+ * exactly what happened: an empty answer from a model that spent its tokens
+ * reasoning was stored, and every later run inherited it for free.
+ */
+function worthCaching(text: string): boolean {
+  return text.trim().length > 0;
+}
+
+/**
+ * Which models this installation is currently configured to use.
+ *
+ * Part of the cache key, because a cached answer is an answer from a particular
+ * model. Without it, changing the model replayed fifty cached failures in under
+ * a second, reported the old model's name, and made one request to the server:
+ * an experiment that looked like it ran and did not.
+ *
+ * The tier is not known until after routing, so this fingerprints the
+ * configuration rather than the tier that ends up being used. Slightly coarse:
+ * changing the large model invalidates entries the small model produced. That
+ * is the right trade, because a stale hit is silent and a recomputation is
+ * merely slow.
+ */
+function modelFingerprint(): string {
+  return [
+    localModelFor("small"),
+    localModelFor("large"),
+    process.env["HARBOR_MODEL"] ?? "",
+  ].join("|");
 }
 
 export interface RouteOptions {
@@ -214,13 +265,16 @@ export async function route(
   const version = options.pipelineVersion ?? 1;
 
   if (task.cacheable) {
-    const key = cacheKey(taskClassId, request, version);
+    const key = cacheKey(taskClassId, request, version, modelFingerprint());
 
     const hit = db.prepare(`SELECT value, model, tier FROM model_cache WHERE key = ?`).get(key) as
       | { value: string; model: string; tier: Tier }
       | undefined;
 
-    if (hit !== undefined) {
+    // An empty cached value is a cached failure. Older rows may hold one, from
+    // before empty answers stopped being stored, so they are ignored on read as
+    // well as refused on write.
+    if (hit !== undefined && worthCaching(hit.value)) {
       db.prepare(`UPDATE model_cache SET hits = hits + 1 WHERE key = ?`).run(key);
 
       return {
@@ -302,13 +356,13 @@ export async function route(
     }
   }
 
-  if (task.cacheable) {
+  if (task.cacheable && worthCaching(textOf(result))) {
     db.prepare(
       `INSERT INTO model_cache (key, task_class, value, model, tier, created_at)
        VALUES (?, ?, ?, ?, ?, ?)
        ON CONFLICT (key) DO NOTHING`,
     ).run(
-      cacheKey(taskClassId, request, version),
+      cacheKey(taskClassId, request, version, modelFingerprint()),
       taskClassId,
       textOf(result),
       result.model,

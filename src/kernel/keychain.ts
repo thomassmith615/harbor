@@ -19,6 +19,10 @@
  * releases, and nothing that can fail to install on a machine meant to run
  * unattended for months.
  */
+import { createHash } from "node:crypto";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { harborHome } from "./paths.js";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
@@ -27,7 +31,36 @@ const run = promisify(execFile);
 /** How a credential value is marked when it lives in the keychain instead. */
 const REFERENCE_PREFIX = "keychain:";
 
-const SERVICE = "harbor";
+/**
+ * The keychain service name, scoped to the installation.
+ *
+ * `harbor` for a normal install, and `harbor:<hash>` for any store that is not
+ * at the default location. The keychain is a machine-wide namespace and
+ * `HARBOR_HOME` is not, which is a mismatch that cost a full day.
+ *
+ * What it looked like: the store key in the real keychain was replaced by a
+ * random key that opened nothing, three times, each time at the exact second an
+ * ordinary command ran. The cause was `npm run verify`. The encryption tests
+ * create a store in a temp directory, encrypt it, and save the key they
+ * generated, and that write landed on the one keychain the machine has. A
+ * perfectly valid write to somebody else's store, which is why every guard
+ * looked at it and approved.
+ *
+ * Scoping by home directory fixes the general case too: two Harbor
+ * installations on one machine, or a test run, can no longer overwrite each
+ * other's credentials. The default path keeps the bare name, so nothing that
+ * already exists has to move.
+ */
+export function keychainService(): string {
+  const home = harborHome();
+  const standard = join(homedir(), ".harbor");
+
+  if (home === standard) {
+    return "harbor";
+  }
+
+  return `harbor:${createHash("sha256").update(home).digest("hex").slice(0, 12)}`;
+}
 
 export type KeychainBackend = "macos" | "libsecret" | "none";
 
@@ -87,14 +120,14 @@ export async function storeSecret(accountId: string, secret: string): Promise<bo
       // Delete first: `add-generic-password -U` updates in place, but only when
       // the existing entry matches exactly, and an account whose label changed
       // would otherwise accumulate entries.
-      await run("security", ["delete-generic-password", "-s", SERVICE, "-a", accountId]).catch(
+      await run("security", ["delete-generic-password", "-s", keychainService(), "-a", accountId]).catch(
         () => undefined,
       );
 
       await run("security", [
         "add-generic-password",
         "-s",
-        SERVICE,
+        keychainService(),
         "-a",
         accountId,
         "-w",
@@ -106,7 +139,7 @@ export async function storeSecret(accountId: string, secret: string): Promise<bo
     }
 
     if (backend === "libsecret") {
-      const child = execFile("secret-tool", ["store", "--label=Harbor", "service", SERVICE, "account", accountId]);
+      const child = execFile("secret-tool", ["store", "--label=Harbor", "service", keychainService(), "account", accountId]);
 
       child.stdin?.write(secret);
       child.stdin?.end();
@@ -133,7 +166,7 @@ export async function readSecret(accountId: string): Promise<string | null> {
       const { stdout } = await run("security", [
         "find-generic-password",
         "-s",
-        SERVICE,
+        keychainService(),
         "-a",
         accountId,
         "-w",
@@ -151,7 +184,7 @@ export async function readSecret(accountId: string): Promise<string | null> {
       const { stdout } = await run("secret-tool", [
         "lookup",
         "service",
-        SERVICE,
+        keychainService(),
         "account",
         accountId,
       ]);
@@ -170,12 +203,12 @@ export async function deleteSecret(accountId: string): Promise<boolean> {
 
   try {
     if (backend === "macos") {
-      await run("security", ["delete-generic-password", "-s", SERVICE, "-a", accountId]);
+      await run("security", ["delete-generic-password", "-s", keychainService(), "-a", accountId]);
       return true;
     }
 
     if (backend === "libsecret") {
-      await run("secret-tool", ["clear", "service", SERVICE, "account", accountId]);
+      await run("secret-tool", ["clear", "service", keychainService(), "account", accountId]);
       return true;
     }
   } catch {

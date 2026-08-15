@@ -20,6 +20,7 @@ import {
 } from "../projections/purchase.js";
 import { attachmentTextFor } from "../store/attachments.js";
 import { saveProjection } from "../store/projections.js";
+import { recoverJson } from "../reasoning/json.js";
 import { route } from "../reasoning/router.js";
 import { DEFAULT_PRINCIPAL } from "../store/schema.js";
 import type { DB } from "../kernel/db.js";
@@ -29,6 +30,23 @@ export const PROJECTION_VERSION = 1;
 
 /** How much of an item is shown to the extractor. Receipts put the total early. */
 const MAX_SOURCE_CHARS = 6_000;
+
+/**
+ * Only sources that can contain a receipt.
+ *
+ * A text message is not a receipt, and queueing 35,000 of them for a projection
+ * that reads email was not merely wasteful: `Remaining` reported 23,705 items
+ * after a pass that had actually finished, because the predicate marks a
+ * bounded pool per run and a quarter of the store could never leave the queue.
+ * A finished job looked like one percent progress.
+ *
+ * The same reasoning as the relationship graph, one layer down: the unit of
+ * work should be the things the pass can possibly say something about.
+ */
+const MAIL_ONLY = `
+  JOIN streams s ON s.id = i.stream_id
+  WHERE i.kind = 'message' AND i.deleted_at IS NULL
+    AND s.connector_id NOT IN ('imessage')`;
 
 interface CandidateRow {
   readonly id: string;
@@ -59,10 +77,10 @@ export function purchaseCandidates(
 ): readonly Candidate[] {
   const rows = db
     .prepare(
-      `SELECT id, title, SUBSTR(body, 1, 6000) AS body, author, occurred_at FROM items
-       WHERE kind = 'message' AND deleted_at IS NULL
-         AND (projection_version IS NULL OR projection_version <> @version)
-       ORDER BY occurred_at DESC
+      `SELECT i.id, i.title, SUBSTR(i.body, 1, 6000) AS body, i.author, i.occurred_at
+       FROM items i ${MAIL_ONLY}
+         AND (i.projection_version IS NULL OR i.projection_version <> @version)
+       ORDER BY i.occurred_at DESC
        LIMIT @pool`,
     )
     .all({ version: PROJECTION_VERSION, pool }) as CandidateRow[];
@@ -101,10 +119,10 @@ export function purchaseCandidates(
 function markUninteresting(db: DB, pool: number): number {
   const rows = db
     .prepare(
-      `SELECT id, title, SUBSTR(body, 1, 6000) AS body, author FROM items
-       WHERE kind = 'message' AND deleted_at IS NULL
-         AND (projection_version IS NULL OR projection_version <> @version)
-       ORDER BY occurred_at DESC
+      `SELECT i.id, i.title, SUBSTR(i.body, 1, 6000) AS body, i.author
+       FROM items i ${MAIL_ONLY}
+         AND (i.projection_version IS NULL OR i.projection_version <> @version)
+       ORDER BY i.occurred_at DESC
        LIMIT @pool`,
     )
     .all({ version: PROJECTION_VERSION, pool }) as CandidateRow[];
@@ -139,6 +157,8 @@ export interface ExtractReport {
   readonly model: string | null;
   readonly tier: string | null;
   readonly remaining: number;
+  /** What had to be stripped from model output, by kind. */
+  readonly repairs: readonly { readonly kind: string; readonly count: number }[];
   readonly durationMs: number;
 }
 
@@ -173,6 +193,7 @@ export async function extractPurchases(
   let model: string | null = null;
   let tier: string | null = null;
   const rejected: string[] = [];
+  const repairs = new Map<string, number>();
 
   for (const candidate of candidates) {
     if (options.shouldStop?.() === true) {
@@ -224,23 +245,25 @@ export async function extractPurchases(
     const text = routed.result.content
       .filter((block): block is Extract<typeof block, { type: "text" }> => block.type === "text")
       .map((block) => block.text)
-      .join("")
-      .trim()
-      .replace(/^```(?:json)?/i, "")
-      .replace(/```$/, "")
-      .trim();
+      .join("");
 
-    let parsed: unknown;
+    const recovery = recoverJson(text);
 
-    try {
-      parsed = JSON.parse(text);
-    } catch {
-      rejected.push(`${candidate.id}: response was not JSON`);
+    if (recovery.error !== null) {
+      rejected.push(`${candidate.id}: ${recovery.error}`);
       options.onProgress?.(read, candidates.length);
       continue;
     }
 
-    const verdict = verifyPurchase(parsed, source);
+    // Counted rather than logged per item, because on a reasoning model this is
+    // every response and the note would drown the output. A high count means
+    // the model is fighting the prompt, which is worth knowing and is not an
+    // error.
+    for (const repair of recovery.repaired) {
+      repairs.set(repair, (repairs.get(repair) ?? 0) + 1);
+    }
+
+    const verdict = verifyPurchase(recovery.value, source);
 
     if (verdict.rejected !== null) {
       rejected.push(`${candidate.id}: ${verdict.rejected}`);
@@ -298,11 +321,10 @@ export async function extractPurchases(
   const remaining = (
     db
       .prepare(
-        `SELECT COUNT(*) AS n FROM items
-         WHERE kind = 'message' AND deleted_at IS NULL
-           AND (projection_version IS NULL OR projection_version <> ?)`,
+        `SELECT COUNT(*) AS n FROM items i ${MAIL_ONLY}
+           AND (i.projection_version IS NULL OR i.projection_version <> @version)`,
       )
-      .get(PROJECTION_VERSION) as { n: number }
+      .get({ version: PROJECTION_VERSION }) as { n: number }
   ).n;
 
   return {
@@ -316,6 +338,7 @@ export async function extractPurchases(
     model,
     tier,
     remaining,
+    repairs: [...repairs.entries()].map(([kind, count]) => ({ kind, count })),
     durationMs: Date.now() - started,
   };
 }

@@ -31,6 +31,8 @@ function logDir(): string {
 import { keyOpens } from "../kernel/db.js";
 import { readSecret } from "../kernel/keychain.js";
 import { KEY_ACCOUNT, isEncrypted } from "../kernel/encryption.js";
+import { recoverJson } from "../reasoning/json.js";
+import { localModelFor } from "../reasoning/local.js";
 
 const run = promisify(execFile);
 
@@ -283,6 +285,132 @@ function checkBackups(): readonly Check[] {
   ];
 }
 
+/**
+ * Whether the configured local model can return usable JSON.
+ *
+ * The check that would have saved a 23-minute run producing nothing. The model
+ * was reachable, the name was right, the prompt was fine, and every response
+ * began with a reasoning trace that made it unparseable. Nothing reported that
+ * until the pass finished.
+ *
+ * Asks for the smallest possible object and reports what actually came back,
+ * including whether it had to be recovered from around a `<think>` block, which
+ * is the difference between a model that works and one that works slowly.
+ */
+async function checkLocalModel(): Promise<readonly Check[]> {
+  const url = process.env["HARBOR_LOCAL_URL"] ?? "http://127.0.0.1:11434/v1/chat/completions";
+  // The model the router will actually call, not a second guess at it.
+  const model = localModelFor("small");
+
+  let response: Response;
+
+  try {
+    response = await fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: "user", content: 'Reply with only this JSON: {"ok":true}' }],
+        max_tokens: 1_000,
+        stream: false,
+        think: false,
+        enable_thinking: false,
+        chat_template_kwargs: { enable_thinking: false },
+      }),
+      signal: AbortSignal.timeout(30_000),
+    });
+  } catch {
+    return [
+      {
+        area: `local model ${model}`,
+        state: "warn",
+        detail: `no reply from ${url}`,
+        fix: "start it (ollama serve), or set HARBOR_LOCAL_URL",
+      },
+    ];
+  }
+
+  if (!response.ok) {
+    const body = await response.text();
+
+    return [
+      {
+        area: `local model ${model}`,
+        state: "problem",
+        detail: `${String(response.status)}: ${body.slice(0, 80)}`,
+        fix: `ollama pull ${model}, or set HARBOR_LOCAL_MODEL`,
+      },
+    ];
+  }
+
+  const payload = (await response.json()) as {
+    choices?: {
+      finish_reason?: string;
+      message?: { content?: string; reasoning?: string; reasoning_content?: string };
+    }[];
+  };
+
+  const choice = payload.choices?.[0];
+  const message = choice?.message;
+  const content = message?.content ?? "";
+
+  // Some servers move the reasoning into its own field and leave `content`
+  // empty. An empty answer beside a full reasoning field is a model that is
+  // still thinking despite being asked not to, which is a different problem
+  // from a model that cannot follow instructions, and the fix is different too.
+  const thoughts = message?.reasoning ?? message?.reasoning_content ?? "";
+
+  if (content.trim().length === 0 && thoughts.trim().length > 0) {
+    return [
+      {
+        area: `local model ${model}`,
+        state: "problem",
+        detail: "reasons but never answers; the reply is all thinking and no content",
+        fix: `ollama pull llama3.2:3b && export HARBOR_LOCAL_MODEL=llama3.2:3b`,
+      },
+    ];
+  }
+
+  if (content.trim().length === 0) {
+    return [
+      {
+        area: `local model ${model}`,
+        state: "problem",
+        detail:
+          choice?.finish_reason === "length"
+            ? "ran out of tokens before answering, which usually means it is reasoning"
+            : "returned an empty reply",
+        fix: `ollama pull llama3.2:3b && export HARBOR_LOCAL_MODEL=llama3.2:3b`,
+      },
+    ];
+  }
+
+  const recovery = recoverJson(content);
+
+  if (recovery.error !== null) {
+    return [
+      {
+        area: `local model ${model}`,
+        state: "problem",
+        detail: `answers, but not with JSON: ${recovery.error}`,
+        fix: "set HARBOR_LOCAL_MODEL to a model that follows a JSON instruction",
+      },
+    ];
+  }
+
+  return [
+    {
+      area: `local model ${model}`,
+      state: recovery.repaired.length === 0 ? "ok" : "warn",
+      detail:
+        recovery.repaired.length === 0
+          ? "returns clean JSON"
+          : `returns JSON wrapped in ${recovery.repaired.join(" and ")}, which is recoverable but slow`,
+      fix: recovery.repaired.length === 0 ? null : "a non-reasoning model would be faster",
+    },
+  ];
+}
+
 export interface PreflightReport {
   readonly checks: readonly Check[];
   readonly problems: number;
@@ -296,6 +424,7 @@ export async function preflight(): Promise<PreflightReport> {
     ...checkNode(),
     ...(await checkKeys()),
     ...(await checkService()),
+    ...(await checkLocalModel()),
     ...checkBackups(),
   ];
 

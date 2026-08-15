@@ -1186,7 +1186,13 @@ async function main(): Promise<number> {
           );
         }
 
-        logger.print(`Remaining      ${String(report.remaining)} items`);
+        for (const repair of report.repairs) {
+          logger.print(
+            `  stripped ${repair.kind} from ${String(repair.count)} of ${String(report.read)} responses`,
+          );
+        }
+
+        logger.print(`Remaining      ${String(report.remaining)} unread emails`);
         logger.print(`Took           ${formatDuration(report.durationMs)}`);
       } finally {
         db.close();
