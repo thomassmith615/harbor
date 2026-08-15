@@ -31,6 +31,41 @@ import type { Observation } from "../store/signals.js";
 /** How small a brief has to be to stay worth reading. */
 export const DEFAULT_BUDGET = 3;
 
+/**
+ * Bump this whenever a detector changes what it would say.
+ *
+ * Observations outlive the rules that produced them. A digest led with "before
+ * has come up in 20 conversations recently" about a marketing email; the
+ * detector was fixed, the pass was re-run, and the digest said exactly the same
+ * thing, because those observations were already queued and nothing re-examines
+ * a queued one.
+ *
+ * This is the third layer to need it. Purchases have a schema version, the
+ * relationship graph has a version, and detectors now do too, for the same
+ * reason: a rule that stops producing something cannot retract what it already
+ * produced.
+ *
+ * 2: topics use the shared distinctiveness test and one-way mail is excluded.
+ */
+export const DETECTOR_VERSION = 2;
+
+/**
+ * Clears observations queued by an older set of rules.
+ *
+ * Dismissals are left alone. A person who has said "not worth saying" has made
+ * a judgement about the finding rather than about the version of the code that
+ * found it, and re-asking would be the most annoying possible behaviour.
+ */
+export function dropStaleObservations(db: DB, version: number): number {
+  return db
+    .prepare(
+      `DELETE FROM observations
+       WHERE state IN ('pending', 'surfaced')
+         AND (detector_version IS NULL OR detector_version <> ?)`,
+    )
+    .run(version).changes;
+}
+
 /** Dismissal rate above which a detector mutes itself, once it has a track record. */
 const SUPPRESS_RATE = 0.7;
 const SUPPRESS_MIN_SAMPLES = 8;
@@ -40,6 +75,7 @@ export interface RunOptions {
   readonly timezone: string;
   readonly embedder?: Embedder | undefined;
   readonly now?: number;
+  readonly onNote?: ((message: string) => void) | undefined;
 }
 
 export interface RunReport {
@@ -50,6 +86,14 @@ export interface RunReport {
 }
 
 export function runDetectors(db: DB, options: RunOptions): RunReport {
+  const stale = dropStaleObservations(db, DETECTOR_VERSION);
+
+  if (stale > 0) {
+    options.onNote?.(
+      `${String(stale)} observations from an older set of rules dropped; they will be found again if they still hold`,
+    );
+  }
+
   const started = Date.now();
   const now = options.now ?? started;
 

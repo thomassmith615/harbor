@@ -19,6 +19,8 @@
  * "you keep mentioning tomorrow", which is why the term has to be uncommon in
  * the corpus as a whole rather than merely frequent lately.
  */
+import { NoiseIndex } from "./noise.js";
+import { TermIndex } from "./terms.js";
 import { recordObservation } from "../store/signals.js";
 import type { DetectorContext, DetectorResult } from "./detectors.js";
 import type { DB } from "../kernel/db.js";
@@ -124,6 +126,16 @@ export function recurringTopics(db: DB, principalId: string, now: number): reado
 
   const topics: Topic[] = [];
 
+  // The same test the relationship graph uses, rather than a second opinion.
+  //
+  // This file had its own stopword list and its own corpus-share ceiling, and
+  // they disagreed with `derive/terms.ts` in the way that matters: "before" and
+  // "pretty" cleared them both, so a real digest said "before has come up in 20
+  // conversations recently" about a marketing email. Two places deciding what a
+  // distinctive word is means one of them is wrong and nobody finds out until
+  // it says something ridiculous out loud.
+  const distinctive = new TermIndex(db);
+
   // How common a term is across the whole corpus, not just lately. This is what
   // separates a subject from a person's ordinary vocabulary, and it adapts per
   // person without anybody maintaining a list.
@@ -145,6 +157,10 @@ export function recurringTopics(db: DB, principalId: string, now: number): reado
     }
 
     if (totalEpisodes >= MIN_CORPUS_FOR_SHARE && overall / totalEpisodes > MAX_CORPUS_SHARE) {
+      continue;
+    }
+
+    if (!distinctive.isDistinctive(term)) {
       continue;
     }
 
@@ -171,6 +187,15 @@ export function recurringTopics(db: DB, principalId: string, now: number): reado
  */
 export function detectRecurringSubjects(db: DB, context: DetectorContext): DetectorResult {
   const topics = recurringTopics(db, context.principalId, context.now);
+
+  // Mail nobody corresponds with is not news about a topic.
+  //
+  // A real digest led with "What would you do with 100,000 points?" from a
+  // flight-deals list and "Check Out Mike's Picks" from a clothing brand. Both
+  // genuinely contained a recurring word, and neither was anything happening.
+  // The graph learned to ignore one-way mail two milestones ago and this layer
+  // never heard about it.
+  const broadcastIds = JSON.stringify(new NoiseIndex(db).broadcastIds);
 
   if (topics.length === 0) {
     return { detectorId: "recurring_subject", examined: 0, created: 0, resolved: 0 };
@@ -219,11 +244,16 @@ export function detectRecurringSubjects(db: DB, context: DetectorContext): Detec
          WHERE i.kind = 'message' AND i.deleted_at IS NULL
            AND s.connector_id NOT IN ('imessage')
            AND i.occurred_at >= @since
+           AND i.id NOT IN (SELECT value FROM json_each(@broadcast))
            AND (LOWER(COALESCE(i.title, '')) LIKE @term OR LOWER(COALESCE(i.body, '')) LIKE @term)
          ORDER BY i.occurred_at DESC
          LIMIT 1`,
       )
-      .get({ since: context.now - MAIL_WINDOW_MS, term: `%${topic.term}%` }) as
+      .get({
+        since: context.now - MAIL_WINDOW_MS,
+        term: `%${topic.term}%`,
+        broadcast: broadcastIds,
+      }) as
       | { id: string; title: string | null; at: number; author: string | null }
       | undefined;
 

@@ -165,7 +165,10 @@ export function merchantKey(name: string): string {
 
   key = key
     .replace(/^(the|a)\s+/, "")
-    .replace(/\b(inc|llc|ltd|co|corp|company|store|stores|shop)\b\.?/g, "")
+    .replace(
+      /\b(inc|llc|ltd|co|corp|corporation|company|technologies|technology|holdings|group|international|limited|gmbh|plc|store|stores|shop)\b\.?/g,
+      "",
+    )
     .replace(/[^a-z0-9]+/g, "");
 
   return key;
@@ -318,4 +321,57 @@ export function isSharedSender(author: string | null): boolean {
   const domain = domainOf(addressOf(author));
 
   return SHARED_SENDERS.some((shared) => domain === shared || domain.endsWith(`.${shared}`));
+}
+
+/**
+ * A merchant name that is not a merchant name.
+ *
+ * Real output: `pgatoursuperstore@mail.pgatour` (an email address),
+ * `ParkMobile, LLC All Rights Res` (a footer), `Microsoft Corporatio...` (a
+ * truncation marker). A small model reading a receipt will grab whatever looks
+ * like a title, and a spending report is only as legible as the names in it.
+ *
+ * Cleaned rather than rejected where cleaning is unambiguous, because the total
+ * is usually right even when the name is scraped from the wrong line.
+ */
+export function cleanMerchant(name: string): string | null {
+  let cleaned = name.trim();
+
+  // An address: keep the part that names the business, drop the routing.
+  if (cleaned.includes("@")) {
+    cleaned = cleaned.split("@")[0] ?? "";
+  }
+
+  cleaned = cleaned
+    .replace(/\ball rights reser?v?e?d?\b\.?/gi, "")
+    .replace(/\bcopyright\b|\u00a9/gi, "")
+    // A truncation marker is the model running out of room, not part of a name.
+    .replace(/\.{2,}$/, "")
+    .replace(/[\s,;|-]+$/, "")
+    .trim();
+
+  if (cleaned.length < 2 || cleaned.length > 60) {
+    return null;
+  }
+
+  // A price in the name means a line was scraped rather than a merchant.
+  if (/[$\u00a3\u20ac]\s?\d/.test(cleaned)) {
+    return null;
+  }
+
+  return cleaned;
+}
+
+/**
+ * Whether a receipt is money coming back rather than going out.
+ *
+ * `American Airlines $676.80` was the largest line in a real spending report
+ * and it was a refund for a seat selection that did not go through. Rejected
+ * rather than negated: a refund is a real event worth recording one day, and
+ * guessing the sign of the largest number in the report is not the way to start.
+ */
+const REFUND = /\b(refund(ed|s)?|credit(ed)? back|reversal|reversed|money back|return(ed)? to your)\b/i;
+
+export function looksLikeRefund(text: string): boolean {
+  return REFUND.test(text);
 }

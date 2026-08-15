@@ -32,6 +32,7 @@ import type { Embedder } from "./embed/index.js";
 import type { Observation } from "../store/signals.js";
 
 import { detectRecurringSubjects } from "./detectors-topics.js";
+import { detectDuePurchases } from "./detectors-purchases.js";
 import {
   detectCommitmentsBeforeEvents,
   detectDueCommitments,
@@ -387,8 +388,8 @@ function detectUpcomingLooseEnds(db: DB, context: DetectorContext): DetectorResu
     .prepare(
       `SELECT DISTINCT t.id AS thread, t.title AS title, t.ends_at AS ends
        FROM threads t
-       JOIN thread_items ti ON ti.thread_id = t.id
-       JOIN items i ON i.id = ti.item_id
+       JOIN thread_nodes tn ON tn.thread_id = t.id
+       JOIN items i ON i.id = tn.node_id AND tn.node_kind = 'item'
        WHERE t.principal_id = @principal
          AND t.source_count >= 2
          AND i.kind = 'event'
@@ -496,6 +497,12 @@ export const DETECTORS: readonly { readonly id: string; readonly run: Detector }
   // The one detector that reasons about a pattern over time rather than a
   // state: a subject recurring across conversations, and mail that touches it.
   { id: "recurring_subject", run: detectRecurringSubjects },
+
+  // Restocking. The one detector that reads the purchase history rather than
+  // the mailbox, and the closest thing here to the product as it was
+  // described: Harbor keeps the receipts and eventually says you are probably
+  // out of something.
+  { id: "purchase_due", run: detectDuePurchases },
 ];
 
 export type { Observation };

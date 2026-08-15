@@ -243,6 +243,11 @@ export class NoiseIndex {
     return this.broadcasts.has(itemId) || this.templates.has(itemId);
   }
 
+  /** One-way mail, for callers that filter in SQL. */
+  get broadcastIds(): readonly string[] {
+    return [...this.broadcasts];
+  }
+
   /** Items that need no graph work at all. */
   get templateIds(): readonly string[] {
     return [...this.templates, ...this.repeats];

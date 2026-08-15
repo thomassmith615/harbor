@@ -260,6 +260,22 @@ export interface SpendRow {
  */
 const DUPLICATE_WINDOW_MS = 36 * 3_600_000;
 
+/**
+ * How long an order-then-ship pair can straddle.
+ *
+ * Two weeks, because "Choosing Keeping, 56.00 GBP" appeared on the 16th and the
+ * 18th of March and thirty-six hours did not cover it: an order confirmation
+ * and a dispatch notice for one candle.
+ *
+ * The tolerance tightens as the window widens, which is what keeps this honest.
+ * Within a day and a half a total may grow by tax and shipping, so a quarter is
+ * right. Ten days later, two purchases at *identical* totals from the same
+ * merchant are the same purchase told twice; two purchases at similar-but-not
+ * identical totals are two Uber rides, and merging those would be a fabrication.
+ */
+const SLOW_DUPLICATE_WINDOW_MS = 14 * 86_400_000;
+const IDENTICAL_TOLERANCE = 0.02;
+
 export function dedupePurchases(
   rows: readonly { merchant: string | null; occurredAt: number; totalCents: number | null }[],
 ): readonly number[] {
@@ -277,12 +293,20 @@ export function dedupePurchases(
       continue;
     }
 
-    const duplicate = chosen.some(
-      (entry) =>
-        sameMerchant(entry.merchant, row.merchant ?? "") &&
-        Math.abs(entry.at - row.occurredAt) <= DUPLICATE_WINDOW_MS &&
-        Math.abs(entry.cents - (row.totalCents ?? 0)) <= Math.max(entry.cents, 1) * 0.25,
-    );
+    const duplicate = chosen.some((entry) => {
+      if (!sameMerchant(entry.merchant, row.merchant ?? "")) {
+        return false;
+      }
+
+      const apart = Math.abs(entry.at - row.occurredAt);
+      const drift = Math.abs(entry.cents - (row.totalCents ?? 0)) / Math.max(entry.cents, 1);
+
+      if (apart <= DUPLICATE_WINDOW_MS) {
+        return drift <= 0.25;
+      }
+
+      return apart <= SLOW_DUPLICATE_WINDOW_MS && drift <= IDENTICAL_TOLERANCE;
+    });
 
     if (duplicate) {
       continue;

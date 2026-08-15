@@ -19,7 +19,7 @@
  * plausible it reads.
  */
 
-import { trustSender } from "./merchants.js";
+import { cleanMerchant, looksLikeRefund, trustSender } from "./merchants.js";
 
 /**
  * Bump this whenever extraction changes what it would produce.
@@ -34,7 +34,7 @@ import { trustSender } from "./merchants.js";
  * purchases stayed filed under hallucinated years, correct in every other
  * respect, and invisible to every report.
  */
-export const PURCHASE_SCHEMA_VERSION = 4;
+export const PURCHASE_SCHEMA_VERSION = 5;
 
 /**
  * Words that make an email look like a receipt.
@@ -256,9 +256,21 @@ export function verifyPurchase(raw: unknown, sourceText: string): PurchaseVerdic
     return { purchase: null, rejected: "no merchant named" };
   }
 
+  const cleaned = cleanMerchant(merchant);
+
+  if (cleaned === null) {
+    return { purchase: null, rejected: `"${merchant.slice(0, 40)}" is not a merchant name` };
+  }
+
+  // Money coming back is not money going out, and the largest line in a real
+  // spending report was a refund for a seat selection that did not go through.
+  if (looksLikeRefund(sourceText.slice(0, 2_000))) {
+    return { purchase: null, rejected: "reads as a refund rather than a purchase" };
+  }
+
   return {
     purchase: {
-      merchant,
+      merchant: cleaned,
       totalCents,
       currency,
       occurred,

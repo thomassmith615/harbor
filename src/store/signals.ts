@@ -8,6 +8,7 @@
  * produced it. A detector that cannot point at anything is a bug, and it should
  * fail loudly at the point it tries to write.
  */
+import { DETECTOR_VERSION } from "../derive/brief.js";
 import { createHash } from "node:crypto";
 import type { DB } from "../kernel/db.js";
 
@@ -263,12 +264,13 @@ export function recordObservation(db: DB, input: ObservationInput): boolean {
 
   db.prepare(
     `INSERT INTO observations
-       (id, principal_id, detector_id, dedup_key, title, detail, salience, evidence,
-        interest_id, earliest_useful_at, expires_at, state, created_at)
-     VALUES (@id, @principalId, @detectorId, @dedupKey, @title, @detail, @salience, @evidence,
-             @interestId, @earliestUsefulAt, @expiresAt, 'pending', @now)`,
+       (id, principal_id, detector_id, detector_version, dedup_key, title, detail, salience,
+        evidence, interest_id, earliest_useful_at, expires_at, state, created_at)
+     VALUES (@id, @principalId, @detectorId, @detectorVersion, @dedupKey, @title, @detail,
+             @salience, @evidence, @interestId, @earliestUsefulAt, @expiresAt, 'pending', @now)`,
   ).run({
     id,
+    detectorVersion: DETECTOR_VERSION,
     principalId: input.principalId,
     detectorId: input.detectorId,
     dedupKey: input.dedupKey,

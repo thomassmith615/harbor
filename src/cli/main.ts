@@ -1217,7 +1217,15 @@ async function main(): Promise<number> {
       const { db } = openDatabase();
 
       try {
-        const days = options.days === undefined ? 90 : Number.parseInt(options.days, 10);
+        // Everything by default.
+        //
+        // Ninety days hid nine tenths of the data: a mailbox running from
+        // February to August produced a three-row report and nothing said a
+        // window was being applied. A report that silently omits most of what
+        // Harbor holds is the same failure as one that silently includes a
+        // scam; only the direction of the error differs.
+        const days =
+          options.days === undefined ? Number.NaN : Number.parseInt(options.days, 10);
         const limit = options.limit === undefined ? 30 : Number.parseInt(options.limit, 10);
 
         const found = listProjections(db, {
@@ -1228,7 +1236,7 @@ async function main(): Promise<number> {
               : options.unconfirmed === true
                 ? "purchase_unconfirmed"
                 : "purchase",
-          since: Date.now() - (Number.isFinite(days) ? days : 90) * 86_400_000,
+          ...(Number.isFinite(days) ? { since: Date.now() - days * 86_400_000 } : {}),
           ...(options.merchant === undefined ? {} : { merchant: options.merchant }),
           // Asked for more than will be shown, because duplicates are removed
           // after the query and a page of thirty that loses six is a short page.
@@ -1269,13 +1277,21 @@ async function main(): Promise<number> {
   purchases
     .command("merchants")
     .description("What has been spent, grouped by merchant")
-    .option("--days <count>", "how far back, default 90")
+    .option("--days <count>", "how far back, default everything")
     .action((options: { days?: string }) => {
       const { db } = openDatabase();
 
       try {
-        const days = options.days === undefined ? 90 : Number.parseInt(options.days, 10);
-        const since = Date.now() - (Number.isFinite(days) ? days : 90) * 86_400_000;
+        // Everything by default.
+        //
+        // Ninety days hid nine tenths of the data: a mailbox running from
+        // February to August produced a three-row report and nothing said a
+        // window was being applied. A report that silently omits most of what
+        // Harbor holds is the same failure as one that silently includes a
+        // scam; only the direction of the error differs.
+        const days =
+          options.days === undefined ? Number.NaN : Number.parseInt(options.days, 10);
+        const since = Number.isFinite(days) ? Date.now() - days * 86_400_000 : 0;
 
         const rows = spendByMerchant(db, DEFAULT_PRINCIPAL, since, Date.now());
 
@@ -2486,6 +2502,9 @@ async function main(): Promise<number> {
         const embedder = await optionalEmbedder();
 
         const report = runDetectors(db, {
+          onNote: (message: string) => {
+            logger.print(`  note: ${message}`);
+          },
           principalId: DEFAULT_PRINCIPAL,
           timezone: tz,
           ...(embedder === undefined ? {} : { embedder }),

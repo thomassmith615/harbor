@@ -1326,6 +1326,21 @@ export const MIGRATIONS: readonly string[] = [
     created_at  INTEGER NOT NULL
   );
   `,
+  // 024: an observation records the rules that produced it.
+  //
+  // Observations outlive the detector that made them. A digest led with
+  // "before has come up in 20 conversations recently" about a marketing email;
+  // the detector was corrected, the pass re-ran, and the digest said exactly
+  // the same thing, because the observation was already queued and nothing
+  // re-examines a queued one.
+  //
+  // Third layer to need this. Purchases version their projections, the graph
+  // versions its edges, and for the same reason: a rule that stops producing
+  // something cannot retract what it has already produced.
+  `
+  ALTER TABLE observations ADD COLUMN detector_version INTEGER;
+  CREATE INDEX observations_detector_version ON observations (detector_version);
+  `,
 ];
 
 /** The only principal that exists until household support lands. */
