@@ -19,10 +19,15 @@ import {
   verifyPurchase,
 } from "../projections/purchase.js";
 import { attachmentTextFor } from "../store/attachments.js";
-import { saveProjection } from "../store/projections.js";
+import {
+  dropProjectionsFor,
+  dropStaleProjections,
+  projectionForItem,
+  saveProjection,
+} from "../store/projections.js";
 import { recoverJson } from "../reasoning/json.js";
-import { isTransfer } from "../projections/merchants.js";
-import { route } from "../reasoning/router.js";
+import { isSharedSender, isTransfer } from "../projections/merchants.js";
+import { forgetCached, route } from "../reasoning/router.js";
 import { DEFAULT_PRINCIPAL } from "../store/schema.js";
 import type { DB } from "../kernel/db.js";
 
@@ -117,6 +122,175 @@ export function purchaseCandidates(
  * answer, not a skipped one. Without it every run would re-scan the entire
  * mailbox to reach the same conclusion.
  */
+/**
+ * When a purchase happened, sceptically.
+ *
+ * A receipt states a date and the email carrying it has one, and the stated
+ * date was trusted absolutely. Small models guess years: a June receipt came
+ * back dated 2024, which is not wrong by a little, it is outside every window
+ * anything asks about. Seventeen purchases were extracted and three appeared in
+ * a ninety-day report, because the rest had been quietly filed two years ago.
+ *
+ * A receipt arrives when the purchase happens, near enough. So the stated date
+ * is used when it is close to the message that carried it, and the message's
+ * own date otherwise. Both are facts; the arrival date is the one that cannot
+ * be hallucinated.
+ *
+ * Asymmetric on purpose. A receipt can plausibly arrive a few days after the
+ * purchase and cannot plausibly arrive months before it, so a date in the
+ * future relative to the email is rejected much harder than one in the past.
+ */
+const STATED_BEFORE_MS = 30 * 86_400_000;
+const STATED_AFTER_MS = 2 * 86_400_000;
+
+export function purchaseDate(stated: number | null, arrived: number): number {
+  if (stated === null) {
+    return arrived;
+  }
+
+  const drift = stated - arrived;
+
+  if (drift < -STATED_BEFORE_MS || drift > STATED_AFTER_MS) {
+    return arrived;
+  }
+
+  return stated;
+}
+
+/**
+ * How many times an email is re-read before Harbor stops trying.
+ *
+ * Fourteen items failed on every pass, several of them marketing pages that
+ * will never contain a total, at roughly six seconds each. The queue never
+ * drained and every future run paid the same cost for the same answer.
+ *
+ * Three, because the model is not deterministic and a second attempt genuinely
+ * does sometimes succeed: a real run recovered twelve items on a retry. Three
+ * failures is a message that cannot be read rather than a call that went badly.
+ */
+const MAX_ATTEMPTS = 3;
+
+/**
+ * Failed attempts, kept as a projection of their own.
+ *
+ * In the projections table rather than a new column, because it is versioned
+ * the same way: when extraction rules change, the count is dropped along with
+ * everything else and an item that used to be unreadable gets another chance
+ * under the new rules.
+ */
+function recordFailure(db: DB, principalId: string, itemId: string, at: number): number {
+  const existing = projectionForItem(db, itemId, "extraction_failure");
+  const attempts = Number(existing?.payload["attempts"] ?? 0) + 1;
+
+  saveProjection(db, {
+    principalId,
+    itemId,
+    type: "extraction_failure",
+    schemaVersion: PURCHASE_SCHEMA_VERSION,
+    occurredAt: at,
+    merchant: null,
+    currency: null,
+    totalCents: null,
+    reference: null,
+    payload: { attempts },
+    confidence: 1,
+    model: null,
+  });
+
+  if (attempts >= MAX_ATTEMPTS) {
+    // Out of the queue. The email is still in the store and still searchable;
+    // Harbor has simply stopped paying to re-read it.
+    db.prepare(`UPDATE items SET projection_version = ? WHERE id = ?`).run(
+      PROJECTION_VERSION,
+      itemId,
+    );
+  }
+
+  return attempts;
+}
+
+/**
+ * Whether anything other than this one email says the purchase happened.
+ *
+ * The question the sender check could not answer. A real merchant leaves a
+ * trail: an order confirmation, then a shipping notice, then a delivery notice,
+ * often a review request weeks later, and for anything you actually chose,
+ * usually a reply or a conversation somewhere. A single email claiming a
+ * seven-hundred-dollar phone, from a sender who has never written before or
+ * since, is the shape of a scam or a mistake, and it is exactly the shape the
+ * envelope test passes: the domain was Shopify's own, which every Shopify store
+ * shares.
+ *
+ * Corroboration is counted rather than judged. Two or more messages from the
+ * same sender, or any message you sent them, is enough. Below that, a large
+ * purchase is recorded and kept out of the spending total until you say
+ * otherwise, which is the same stance the fact layer already takes: Harbor may
+ * notice, it may not decide.
+ *
+ * Only applied above a threshold. A twelve-dollar lunch that arrives once from
+ * a restaurant's ordering platform is not worth doubting, and a rule that
+ * doubts everything is one nobody reads.
+ */
+const CORROBORATION_THRESHOLD_CENTS = 15_000;
+
+/**
+ * Which shelf a verified purchase belongs on.
+ *
+ * Three: money that moved rather than was spent, a large purchase nothing else
+ * in the store corroborates, and everything else.
+ */
+function purchaseType(
+  db: DB,
+  purchase: { merchant: string | null; totalCents: number | null },
+  author: string | null,
+): string {
+  if (isTransfer(purchase.merchant)) {
+    return "transfer";
+  }
+
+  const large = (purchase.totalCents ?? 0) >= CORROBORATION_THRESHOLD_CENTS;
+
+  if (large && isSharedSender(author) && !corroborated(db, author)) {
+    return "purchase_unconfirmed";
+  }
+
+  return "purchase";
+}
+
+function corroborated(db: DB, author: string | null): boolean {
+  if (author === null) {
+    return false;
+  }
+
+  const address = (/<([^<>]+)>/.exec(author)?.[1] ?? author).trim().toLowerCase();
+
+  if (address.length === 0) {
+    return false;
+  }
+
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM items
+       WHERE deleted_at IS NULL AND LOWER(author) LIKE '%' || ? || '%'`,
+    )
+    .get(address) as { n: number };
+
+  if (row.n > 1) {
+    return true;
+  }
+
+  // Or you wrote to them, which is the strongest signal there is.
+  const replied = db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM items i, json_each(i.participants)
+       WHERE i.direction = 'outbound' AND i.deleted_at IS NULL
+         AND LOWER(json_each.value) = ?`,
+    )
+    .get(address) as { n: number };
+
+  return replied.n > 0;
+}
+
 function markUninteresting(db: DB, pool: number): number {
   const rows = db
     .prepare(
@@ -136,6 +310,13 @@ function markUninteresting(db: DB, pool: number): number {
       const attachmentText = attachmentTextFor(db, row.id);
 
       if (!looksLikePurchase({ title: row.title, body: row.body, author: row.author, attachmentText })) {
+        // An email that used to produce a purchase and no longer qualifies is
+        // the case with no replacement row. The scam receipts were exactly
+        // this: still in the table, and re-read for free every pass by the
+        // predicate that had already rejected them.
+        dropProjectionsFor(db, row.id, "purchase");
+        dropProjectionsFor(db, row.id, "transfer");
+
         mark.run(PROJECTION_VERSION, row.id);
         marked += 1;
       }
@@ -178,6 +359,24 @@ export async function extractPurchases(
   const started = Date.now();
   const principalId = options.principalId ?? DEFAULT_PRINCIPAL;
   const budget = options.limit ?? 50;
+
+  // Old rules first.
+  //
+  // A projection outlives the reasoning that produced it, and a rule that says
+  // "this is not a purchase" writes nothing, so it cannot overwrite anything.
+  // Without this, an invoice scam and $1,650 of brokerage transfers survived
+  // two full passes under rules that had already rejected them.
+  const stale =
+    dropStaleProjections(db, "purchase", PURCHASE_SCHEMA_VERSION) +
+    dropStaleProjections(db, "transfer", PURCHASE_SCHEMA_VERSION) +
+    dropStaleProjections(db, "extraction_failure", PURCHASE_SCHEMA_VERSION) +
+    dropStaleProjections(db, "purchase_unconfirmed", PURCHASE_SCHEMA_VERSION);
+
+  if (stale > 0) {
+    options.onNote?.(
+      `${String(stale)} purchases from an older set of rules removed; they will be re-read`,
+    );
+  }
 
   const skippedFree = markUninteresting(db, 4_000);
 
@@ -222,15 +421,23 @@ export async function extractPurchases(
       .join("\n")
       .slice(0, MAX_SOURCE_CHARS);
 
+    const request = {
+      system: PURCHASE_SYSTEM,
+      messages: [{ role: "user" as const, content: source }],
+      // A long itinerary with a dozen line items overruns the default and the
+      // reply stops mid-object. It reads as "no JSON object in the response",
+      // which sounds like a model that cannot follow instructions and is
+      // actually one that ran out of room.
+      maxTokens: 4_096,
+    };
+
     let routed;
 
     try {
-      routed = await route(
-        db,
-        "extract.structured",
-        { system: PURCHASE_SYSTEM, messages: [{ role: "user", content: source }] },
-        { principalId, pipelineVersion: PROJECTION_VERSION },
-      );
+      routed = await route(db, "extract.structured", request, {
+        principalId,
+        pipelineVersion: PROJECTION_VERSION,
+      });
     } catch (error) {
       // One item failing is not the pass failing. The item stays pending and
       // is retried next run, the same contract the derive pass now honours.
@@ -251,7 +458,15 @@ export async function extractPurchases(
     const recovery = recoverJson(text);
 
     if (recovery.error !== null) {
-      rejected.push(`${candidate.id}: ${recovery.error}`);
+      // So the retry is a retry. A cached answer that could not be parsed is a
+      // cached failure, and replaying it makes re-running the pass pointless.
+      forgetCached(db, "extract.structured", request, PROJECTION_VERSION);
+      dropProjectionsFor(db, candidate.id, "purchase");
+      dropProjectionsFor(db, candidate.id, "transfer");
+      const attempts = recordFailure(db, principalId, candidate.id, candidate.occurredAt);
+      rejected.push(
+        `${candidate.id}: ${recovery.error}${attempts >= MAX_ATTEMPTS ? " (giving up)" : ""}`,
+      );
       options.onProgress?.(read, candidates.length);
       continue;
     }
@@ -266,8 +481,18 @@ export async function extractPurchases(
 
     const verdict = verifyPurchase(recovery.value, source);
 
+    if (verdict.purchase === null) {
+      // Parsed, and then failed checking. Same reasoning: a cached answer that
+      // did not survive verification is not worth replaying.
+      forgetCached(db, "extract.structured", request, PROJECTION_VERSION);
+    }
+
     if (verdict.rejected !== null) {
-      rejected.push(`${candidate.id}: ${verdict.rejected}`);
+      const attempts = recordFailure(db, principalId, candidate.id, candidate.occurredAt);
+      rejected.push(
+        `${candidate.id}: ${verdict.rejected ?? "rejected"}` +
+          (attempts >= MAX_ATTEMPTS ? " (giving up)" : ""),
+      );
       options.onProgress?.(read, candidates.length);
       continue;
     }
@@ -286,6 +511,9 @@ export async function extractPurchases(
 
     const purchase = verdict.purchase;
 
+    dropProjectionsFor(db, candidate.id, "extraction_failure");
+    dropProjectionsFor(db, candidate.id, "purchase_unconfirmed");
+
     saveProjection(db, {
       principalId,
       itemId: candidate.id,
@@ -296,12 +524,12 @@ export async function extractPurchases(
       // of a $4,885 total, which makes every other number in it meaningless.
       // Recorded under their own type rather than discarded: "$1,522 to
       // Robinhood on June 15" is worth keeping, it just is not spending.
-      type: isTransfer(verdict.purchase.merchant) ? "transfer" : "purchase",
+      type: purchaseType(db, verdict.purchase, row.author),
       schemaVersion: PURCHASE_SCHEMA_VERSION,
       // The stated date when there is one, otherwise when the mail arrived. A
       // receipt usually arrives the same day, and a wrong date is worse than an
       // approximate one for anything that groups by month.
-      occurredAt: purchase.occurred ?? row.occurred_at,
+      occurredAt: purchaseDate(purchase.occurred, row.occurred_at),
       merchant: purchase.merchant,
       currency: purchase.currency,
       totalCents: purchase.totalCents,

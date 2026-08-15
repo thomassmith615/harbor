@@ -92,3 +92,62 @@ describe("transfers", () => {
     }
   });
 });
+
+describe("when a purchase happened", () => {
+  test("a stated date near the email is used", async () => {
+    const { purchaseDate } = await import("../derive/extract.js");
+    const arrived = Date.UTC(2026, 6, 20);
+
+    // Same day, and a receipt that arrives the morning after.
+    assert.equal(purchaseDate(arrived, arrived), arrived);
+    assert.equal(purchaseDate(arrived - 86_400_000, arrived), arrived - 86_400_000);
+  });
+
+  test("a hallucinated year falls back to when the email arrived", async () => {
+    // The real failure: a June receipt came back dated two years earlier, which
+    // is not wrong by a little. It is outside every window anything asks about,
+    // so seventeen purchases produced a three-merchant report.
+    const { purchaseDate } = await import("../derive/extract.js");
+    const arrived = Date.UTC(2026, 6, 20);
+    const wrongYear = Date.UTC(2024, 6, 20);
+
+    assert.equal(purchaseDate(wrongYear, arrived), arrived);
+  });
+
+  test("a receipt cannot arrive months before the purchase", async () => {
+    const { purchaseDate } = await import("../derive/extract.js");
+    const arrived = Date.UTC(2026, 6, 20);
+
+    assert.equal(purchaseDate(arrived + 90 * 86_400_000, arrived), arrived);
+  });
+});
+
+describe("shared sending platforms", () => {
+  test("a platform domain says nothing about the merchant", async () => {
+    const { isSharedSender } = await import("./merchants.js");
+
+    // The one that got through: Shopify's own infrastructure, which every
+    // Shopify store shares, real boutique and dropship front alike.
+    assert.equal(
+      isSharedSender("Mildred Collective <store+75632214210@t.shopifyemail.com>"),
+      true,
+    );
+    assert.equal(isSharedSender("X <bounce@sendgrid.net>"), true);
+  });
+
+  test("a merchant's own domain is not a platform", async () => {
+    const { isSharedSender } = await import("./merchants.js");
+
+    assert.equal(isSharedSender("DSW <orders@dsw.com>"), false);
+    assert.equal(isSharedSender("Uber Receipts <noreply@uber.com>"), false);
+  });
+
+  test("a platform sender still passes the envelope test", async () => {
+    // It has to. The envelope is genuine; it just carries no evidence about
+    // who the merchant is, which is why corroboration exists separately.
+    assert.equal(
+      trustSender("Mildred Collective <store+75632214210@t.shopifyemail.com>").trusted,
+      true,
+    );
+  });
+});

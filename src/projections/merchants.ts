@@ -261,3 +261,61 @@ export function isTransfer(merchant: string | null): boolean {
 
   return TRANSFER_MERCHANTS.some((name) => key === name || key.startsWith(name));
 }
+
+/**
+ * Sending platforms, where the domain identifies the platform and not the
+ * merchant.
+ *
+ * `store+75632214210@t.shopifyemail.com` looked like a solid envelope and is
+ * nothing of the kind: every Shopify store on earth sends from that domain, a
+ * real boutique and a dropship front alike. The same is true of every bulk
+ * email service, which is most of the ones a small merchant uses.
+ *
+ * So for these, the display name is unverifiable by construction. A brand-name
+ * check against the domain cannot fail and cannot pass; it simply does not
+ * apply, and treating "the domain is real" as "the merchant is real" is the
+ * mistake that let a $749 iPhone into a spending report.
+ */
+const SHARED_SENDERS = [
+  "shopifyemail.com",
+  "sendgrid.net",
+  "mailgun.org",
+  "mailgun.net",
+  "klaviyomail.com",
+  "mcsv.net",
+  "rsgsv.net",
+  "mailchimpapp.net",
+  "sparkpostmail.com",
+  "amazonses.com",
+  "postmarkapp.com",
+  "mandrillapp.com",
+  "sendinblue.com",
+  "brevo.com",
+  "cmail19.com",
+  "createsend.com",
+  "hubspotemail.net",
+  "salesforce.com",
+  "exacttarget.com",
+  "mktomail.com",
+  "incentivio.com",
+  "chowlyinc.com",
+  "toasttab.com",
+  "squareup.com",
+];
+
+/**
+ * Whether the sending domain says anything about who the merchant is.
+ *
+ * Not a judgement about the merchant. A great many real purchases arrive this
+ * way, and the point is only that the envelope carries no evidence, so the
+ * evidence has to come from somewhere else.
+ */
+export function isSharedSender(author: string | null): boolean {
+  if (author === null) {
+    return false;
+  }
+
+  const domain = domainOf(addressOf(author));
+
+  return SHARED_SENDERS.some((shared) => domain === shared || domain.endsWith(`.${shared}`));
+}

@@ -377,3 +377,81 @@ export function projectionForItem(db: DB, itemId: string, type: string): Project
 
   return row === undefined ? null : hydrate(row);
 }
+
+/**
+ * Removes projections written under an older set of rules.
+ *
+ * Necessary because a projection outlives the reasoning that produced it. When
+ * the purchase schema moved to version 2, three rules changed: receipts from
+ * consumer mail accounts stopped counting, brokerage and card activity became
+ * transfers rather than purchases, and line items with no price were dropped.
+ * Every one of those decisions was applied to new extractions and none of them
+ * to rows already in the table.
+ *
+ * The result on a real store: an invoice scam and $1,650 of brokerage transfers
+ * stayed in the spending total through two full extraction passes, because
+ * nothing re-reading those emails could produce a row that would overwrite
+ * them. A rule that says "this is not a purchase" writes nothing, and writing
+ * nothing cannot replace anything.
+ *
+ * Run before a pass rather than during it, so a report describes one set of
+ * rules rather than a mixture.
+ */
+export function dropStaleProjections(db: DB, type: string, schemaVersion: number): number {
+  const work = db.transaction(() => {
+    const rows = db
+      .prepare(
+        `SELECT id, item_id AS itemId FROM projections
+         WHERE type = ? AND schema_version <> ?`,
+      )
+      .all(type, schemaVersion) as { id: string; itemId: string }[];
+
+    const removeLines = db.prepare(`DELETE FROM projection_lines WHERE projection_id = ?`);
+
+    // The item has to go back in the queue as well as lose its row.
+    //
+    // Deleting the projection and leaving `projection_version` set removed
+    // thirty-nine purchases and re-read none of them: the pass asks for items
+    // whose version is not current, and every one of those still looked done. A
+    // spending report dropped from thirty-three purchases to two, and three
+    // consecutive passes reported no work.
+    const requeue = db.prepare(`UPDATE items SET projection_version = NULL WHERE id = ?`);
+
+    for (const row of rows) {
+      removeLines.run(row.id);
+      requeue.run(row.itemId);
+    }
+
+    return db
+      .prepare(`DELETE FROM projections WHERE type = ? AND schema_version <> ?`)
+      .run(type, schemaVersion).changes;
+  });
+
+  return work();
+}
+
+/**
+ * Removes an item's projections of a type.
+ *
+ * For the case that has no replacement row: an email that used to produce a
+ * purchase and, under the current rules, produces nothing at all.
+ */
+export function dropProjectionsFor(db: DB, itemId: string, type: string): number {
+  const work = db.transaction(() => {
+    const ids = db
+      .prepare(`SELECT id FROM projections WHERE item_id = ? AND type = ?`)
+      .all(itemId, type) as { id: string }[];
+
+    const removeLines = db.prepare(`DELETE FROM projection_lines WHERE projection_id = ?`);
+
+    for (const row of ids) {
+      removeLines.run(row.id);
+    }
+
+    return db
+      .prepare(`DELETE FROM projections WHERE item_id = ? AND type = ?`)
+      .run(itemId, type).changes;
+  });
+
+  return work();
+}

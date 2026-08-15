@@ -34,7 +34,13 @@ import { buildCommitments, intentCandidates } from "../derive/commitments.js";
 import { latestDigest, produceDigest, recentDigests } from "../derive/digest.js";
 import { extractPurchases, purchaseCandidates } from "../derive/extract.js";
 import { attachmentSummary, attachmentsFor } from "../store/attachments.js";
-import { dedupePurchases, linesFor, listProjections, spendByMerchant } from "../store/projections.js";
+import {
+  countProjections,
+  dedupePurchases,
+  linesFor,
+  listProjections,
+  spendByMerchant,
+} from "../store/projections.js";
 import {
   countCommitments,
   evidenceFor,
@@ -1202,11 +1208,12 @@ async function main(): Promise<number> {
   purchases
     .command("list", { isDefault: true })
     .option("--transfers", "money moved rather than spent: brokerages, cards, peer-to-peer")
+    .option("--unconfirmed", "large purchases nothing else in the store corroborates")
     .description("What has been bought, most recent first")
     .option("--days <count>", "how far back, default 90")
     .option("--merchant <name>", "narrow to one merchant")
     .option("-n, --limit <count>", "how many, default 30")
-    .action((options: { days?: string; merchant?: string; limit?: string; transfers?: boolean }) => {
+    .action((options: { days?: string; merchant?: string; limit?: string; transfers?: boolean; unconfirmed?: boolean }) => {
       const { db } = openDatabase();
 
       try {
@@ -1215,7 +1222,12 @@ async function main(): Promise<number> {
 
         const found = listProjections(db, {
           principalId: DEFAULT_PRINCIPAL,
-          type: options.transfers === true ? "transfer" : "purchase",
+          type:
+            options.transfers === true
+              ? "transfer"
+              : options.unconfirmed === true
+                ? "purchase_unconfirmed"
+                : "purchase",
           since: Date.now() - (Number.isFinite(days) ? days : 90) * 86_400_000,
           ...(options.merchant === undefined ? {} : { merchant: options.merchant }),
           // Asked for more than will be shown, because duplicates are removed
@@ -1289,6 +1301,18 @@ async function main(): Promise<number> {
         // Said plainly, because a spending total that quietly omits what it
         // could not read is worse than one that admits the gap.
         logger.print("Only receipts Harbor could read and verify are counted here.");
+
+        // Said here rather than left to be discovered. A total that quietly
+        // omits a $749 purchase is as misleading as one that quietly includes
+        // it; the difference is only which way the error runs.
+        const unconfirmed = countProjections(db, "purchase_unconfirmed");
+
+        if (unconfirmed > 0) {
+          logger.print(
+            `${plural(unconfirmed, "purchase is", "purchases are")} large and corroborated by ` +
+              "nothing else in your mail, so not counted: `harbor purchases --unconfirmed`.",
+          );
+        }
       } finally {
         db.close();
       }

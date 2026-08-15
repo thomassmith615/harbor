@@ -426,3 +426,25 @@ export function cacheStats(db: DB): { entries: number; hits: number } {
 
   return row;
 }
+
+/**
+ * Forgets a cached answer.
+ *
+ * For a response that parsed and then failed verification. Without this, a
+ * retry is not a retry: the cache replays the same bad answer for free, so
+ * thirty-three items failed identically on three consecutive passes in under a
+ * second each, and no amount of re-running could ever change the outcome.
+ *
+ * The same principle as refusing to cache an empty completion, one step later:
+ * an answer that did not survive checking is not an answer worth keeping.
+ */
+export function forgetCached(
+  db: DB,
+  taskClassId: string,
+  request: CompletionRequest,
+  pipelineVersion: number,
+): void {
+  db.prepare(`DELETE FROM model_cache WHERE key = ?`).run(
+    cacheKey(taskClassId, request, pipelineVersion, modelFingerprint()),
+  );
+}

@@ -21,7 +21,20 @@
 
 import { trustSender } from "./merchants.js";
 
-export const PURCHASE_SCHEMA_VERSION = 2;
+/**
+ * Bump this whenever extraction changes what it would produce.
+ *
+ * It is the only thing that makes existing rows get re-read: `extract` drops
+ * projections written under a different version and puts their items back in
+ * the queue. Change a rule without bumping it and the rule applies to new
+ * receipts only, silently.
+ *
+ * That has now happened twice. Version 2 added sender trust and transfers, and
+ * version 3 exists because the date guard shipped without one: seventeen
+ * purchases stayed filed under hallucinated years, correct in every other
+ * respect, and invisible to every report.
+ */
+export const PURCHASE_SCHEMA_VERSION = 4;
 
 /**
  * Words that make an email look like a receipt.
@@ -236,9 +249,16 @@ export function verifyPurchase(raw: unknown, sourceText: string): PurchaseVerdic
       ? fields["currency"].toUpperCase()
       : null;
 
+  // A total with no merchant is a number with nowhere to go. It cannot be
+  // grouped, deduplicated, or asked about, and it appears in a report as
+  // "unknown", which is worse than absent because it looks like a finding.
+  if (merchant === null || merchant.length === 0) {
+    return { purchase: null, rejected: "no merchant named" };
+  }
+
   return {
     purchase: {
-      merchant: merchant !== null && merchant.length > 0 ? merchant : null,
+      merchant,
       totalCents,
       currency,
       occurred,
