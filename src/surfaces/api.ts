@@ -22,6 +22,7 @@
 import { createServer } from "node:http";
 import { createServer as createSecureServer } from "node:https";
 import { serveStatic } from "./static.js";
+import { APP_HTML } from "./app.js";
 import { ask } from "../reasoning/ask.js";
 import {
   allTurns,
@@ -1405,6 +1406,26 @@ export function startApi(db: DB, options: ApiOptions): Server {
         options.uiRoot !== undefined &&
         serveStatic({ root: options.uiRoot }, path, response).handled
       ) {
+        return;
+      }
+
+      // The built-in page, when no front end has been pointed at.
+      //
+      // Compiled into the daemon rather than installed beside it, so it cannot
+      // fall behind the API it talks to. The previous front end was a separate
+      // repository, fell six milestones behind, and was shelved; this one has
+      // no version of its own to be wrong.
+      //
+      // Served before the token check because it is not secret, and because a
+      // browser needs the page in order to have somewhere to type the pairing
+      // code. Everything behind it still needs a token.
+      if (method === "GET" && !isApiPath(path) && (path === "/" || path === "/index.html")) {
+        response.writeHead(200, {
+          "content-type": "text/html; charset=utf-8",
+          "cache-control": "no-store",
+        });
+        response.end(APP_HTML);
+
         return;
       }
 

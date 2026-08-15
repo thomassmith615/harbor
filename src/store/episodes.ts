@@ -218,23 +218,95 @@ export function episodeForItem(db: DB, itemId: string): Episode | null {
 export function recentEpisodes(
   db: DB,
   principalId: string,
-  options: { readonly limit?: number; readonly since?: number } = {},
+  options: {
+    readonly limit?: number;
+    readonly since?: number;
+    /** Entity id. Only conversations that person took part in. */
+    readonly personId?: string | undefined;
+  } = {},
 ): readonly Episode[] {
+  // Scoping by person goes through the entity links rather than the text.
+  //
+  // This is the difference between "what did Joey ask me" working and not. An
+  // iMessage transcript never contains the sender's name: the title is a phone
+  // number and the words are just the words. Searching for "Joey" over
+  // conversations finds nothing, which reads to a person as Harbor not having
+  // their messages, when it has two thousand of them filed under a handle that
+  // resolution has already tied to the name.
   const rows = db
     .prepare(
-      `SELECT * FROM episodes
-       WHERE principal_id = @principal
-         AND (@since IS NULL OR ends_at >= @since)
-       ORDER BY ends_at DESC
+      `SELECT e.* FROM episodes e
+       WHERE e.principal_id = @principal
+         AND (@since IS NULL OR e.ends_at >= @since)
+         AND (@person IS NULL OR EXISTS (
+           SELECT 1 FROM episode_items ei
+           JOIN item_entities ie ON ie.item_id = ei.item_id
+           WHERE ei.episode_id = e.id AND ie.entity_id = @person
+         ))
+       ORDER BY e.ends_at DESC
+       LIMIT @limit`,
+    )
+    .all({
+      principal: principalId,
+      since: options.since ?? null,
+      person: options.personId ?? null,
+      limit: options.limit ?? 20,
+    }) as EpisodeRow[];
+
+  return rows.map(hydrateEpisode);
+}
+
+export interface Correspondent {
+  readonly entityId: string;
+  readonly name: string;
+  readonly lastAt: number;
+  readonly messages: number;
+  readonly sent: number;
+}
+
+/**
+ * Who you have actually been in contact with, most recent first.
+ *
+ * "Who have I contacted recently" had no tool behind it, so the model fell back
+ * to text search and answered from whatever happened to match, which looked
+ * like Harbor not knowing its own contacts. It is a group-by over the entity
+ * links, which is the one thing this store is unusually well set up to answer:
+ * 1,403 resolved people and 31,000 links.
+ *
+ * Self is excluded. Being on your own messages is not being in contact.
+ */
+export function recentCorrespondents(
+  db: DB,
+  principalId: string,
+  options: { readonly limit?: number; readonly since?: number } = {},
+): readonly Correspondent[] {
+  const rows = db
+    .prepare(
+      `SELECT ie.entity_id AS entityId,
+              en.display_name AS name,
+              MAX(i.occurred_at) AS lastAt,
+              COUNT(*) AS messages,
+              SUM(CASE WHEN i.direction = 'outbound' THEN 1 ELSE 0 END) AS sent
+       FROM item_entities ie
+       JOIN items i ON i.id = ie.item_id
+       JOIN entities en ON en.id = ie.entity_id
+       JOIN accounts a ON a.id = i.account_id
+       WHERE i.deleted_at IS NULL
+         AND a.custodian_person_id = @principal
+         AND en.merged_into IS NULL
+         AND en.kind <> 'self'
+         AND (@since IS NULL OR i.occurred_at >= @since)
+       GROUP BY ie.entity_id
+       ORDER BY lastAt DESC
        LIMIT @limit`,
     )
     .all({
       principal: principalId,
       since: options.since ?? null,
       limit: options.limit ?? 20,
-    }) as EpisodeRow[];
+    }) as Correspondent[];
 
-  return rows.map(hydrateEpisode);
+  return rows;
 }
 
 export function countEpisodes(db: DB): number {

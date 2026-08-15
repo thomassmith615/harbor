@@ -42,7 +42,7 @@ import { composeBrief } from "../derive/brief.js";
 import { connectionsFor, threadNodes, topThreads } from "../store/relationships.js";
 import { nodeKey, parseNodeRef, summarize } from "../store/nodes.js";
 import type { NodeRef, NodeSummary } from "../store/nodes.js";
-import { episodeForItem, episodeItems, getEpisode } from "../store/episodes.js";
+import { episodeForItem, episodeItems, getEpisode, recentCorrespondents } from "../store/episodes.js";
 import { searchEpisodes } from "../retrieval/episodes.js";
 import { evidenceFor, listCommitments } from "../store/commitments.js";
 import { dedupePurchases, linesFor, listProjections, spendByMerchant } from "../store/projections.js";
@@ -113,13 +113,31 @@ export const TOOLS: readonly ToolSchema[] = [
     },
   },
   {
+    name: "people",
+    description:
+      "Who the user has actually been in contact with, most recent first, with how many " +
+      "messages and when. Use this for questions like 'who have I contacted recently' or " +
+      "'who have I not spoken to in a while'. This reads the resolved identity links, so it " +
+      "covers texts filed under a phone number as well as mail.",
+    input_schema: {
+      type: "object",
+      properties: {
+        days: { type: "number", description: "How far back to look. Defaults to 30." },
+        limit: { type: "number", description: "How many people. Defaults to 20." },
+      },
+    },
+  },
+  {
     name: "find_person",
     description:
       "Resolve a name, partial name, or address to the people Harbor knows about. Returns " +
       "each match with its id, known addresses, and how much correspondence there is. Call " +
-      "this first for any question about a specific person, then pass the id to search as " +
-      "`person`: that finds everything involving them, including messages where their name " +
-      "never appears in the text. If several people match, ask which one rather than guessing.",
+      "this FIRST for any question that names a person, then pass the id as `person` to " +
+      "`conversations` for what was said and to `search` for everything else. This matters " +
+      "more than it sounds: a text message never contains the sender's name, so searching " +
+      "for someone by name finds nothing even when there are thousands of their messages " +
+      "filed under a phone number. Never conclude that a person's messages are absent " +
+      "without having tried their entity id. If several people match, ask which one.",
     input_schema: {
       type: "object",
       properties: {
@@ -222,7 +240,9 @@ export const TOOLS: readonly ToolSchema[] = [
       "usually meaningless (\"yeah saturday works\"), so message-based sources are indexed as " +
       "episodes: one continuous stretch of a chat, with who was talking and what was said. " +
       "Use this for anything about what was discussed, planned, suggested, or agreed in " +
-      "messages. Returns a transcript for each match.",
+      "messages. Returns a transcript for each match. For anything about a named person, " +
+      "call `find_person` first and pass the id as `person`, with or without a query: the " +
+      "name will not be in the text, so a query alone will miss everything.",
     input_schema: {
       type: "object",
       properties: {
@@ -909,6 +929,44 @@ export async function runTool(
       ),
       isError: false,
       itemIds,
+    };
+  }
+
+  if (call.name === "people") {
+    const days = typeof call.input["days"] === "number" ? call.input["days"] : 30;
+    const limit = typeof call.input["limit"] === "number" ? call.input["limit"] : 20;
+
+    const found = recentCorrespondents(db, context.principal, {
+      since: Date.now() - Math.max(1, days) * 86_400_000,
+      limit: Math.min(Math.max(1, limit), 50),
+    });
+
+    if (found.length === 0) {
+      return {
+        content: JSON.stringify({ count: 0, note: `Nobody in the last ${String(days)} days.` }),
+        isError: false,
+        itemIds: [],
+      };
+    }
+
+    return {
+      content: JSON.stringify(
+        {
+          count: found.length,
+          days,
+          people: found.map((person) => ({
+            id: person.entityId,
+            name: person.name,
+            messages: person.messages,
+            you_sent: person.sent,
+            last: humanWhen(person.lastAt, context.timezone),
+          })),
+        },
+        null,
+        1,
+      ),
+      isError: false,
+      itemIds: [],
     };
   }
 
