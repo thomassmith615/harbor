@@ -99,17 +99,30 @@ export async function runTaskDirectly(
     const accounts = listAccounts(db);
     let changed = 0;
 
-    for (const account of accounts) {
-      const reports = await syncAccount(db, account, "auto", {
-        timezone: context.timezone,
-      });
+    const failures: string[] = [];
 
-      for (const report of reports) {
-        changed += report.changed;
+    for (const account of accounts) {
+      // Same isolation as the job runner. This loop runs unattended every
+      // fifteen minutes, which is precisely where a single throwing account
+      // silently stopping every other source does the most damage.
+      try {
+        const reports = await syncAccount(db, account, "auto", {
+          timezone: context.timezone,
+        });
+
+        for (const report of reports) {
+          changed += report.changed;
+        }
+      } catch (error) {
+        failures.push(
+          `${account.label} (${account.sourceType}): ${error instanceof Error ? error.message : String(error)}`,
+        );
       }
     }
 
-    return `${String(changed)} new or changed`;
+    return failures.length === 0
+      ? `${String(changed)} new or changed`
+      : `${String(changed)} new or changed; ${String(failures.length)} failed: ${failures.join("; ")}`;
   }
 
   if (task === "derive") {

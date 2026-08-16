@@ -905,26 +905,39 @@ async function main(): Promise<number> {
             }
 
             let lastLine = "";
+            let reports: Awaited<ReturnType<typeof syncAccount>> = [];
 
-            const reports = await syncAccount(db, account, mode, {
-              timezone: tz,
-              concurrency: Number.isFinite(concurrency) ? concurrency : 3,
-              ...(options.source === undefined ? {} : { only: options.source }),
-              onNote: (message) => {
-                process.stdout.write("\r".padEnd(48) + "\r");
-                logger.print(`  note: ${message}`);
-              },
-              onProgress: (phase, done, total) => {
-                const line =
-                  total === null
-                    ? `  ${phase} ${String(done)}`
-                    : `  ${phase} ${String(done)}/${String(total)}`;
-                if (line !== lastLine) {
-                  lastLine = line;
-                  process.stdout.write(`\r${line}          `);
-                }
-              },
-            });
+            try {
+              reports = await syncAccount(db, account, mode, {
+                timezone: tz,
+                concurrency: Number.isFinite(concurrency) ? concurrency : 3,
+                ...(options.source === undefined ? {} : { only: options.source }),
+                onNote: (message) => {
+                  process.stdout.write("\r".padEnd(48) + "\r");
+                  logger.print(`  note: ${message}`);
+                },
+                onProgress: (phase, done, total) => {
+                  const line =
+                    total === null
+                      ? `  ${phase} ${String(done)}`
+                      : `  ${phase} ${String(done)}/${String(total)}`;
+                  if (line !== lastLine) {
+                    lastLine = line;
+                    process.stdout.write(`\r${line}          `);
+                  }
+                },
+              });
+            } catch (error) {
+              // Named and skipped, never fatal. One unreachable mailbox must
+              // not stop the calendar, the reminders, and the messages from
+              // syncing behind it.
+              process.stdout.write("\r".padEnd(48) + "\r");
+              logger.warn(
+                `${account.label} (${account.sourceType}) failed: ` +
+                  `${error instanceof Error ? error.message : String(error)}`,
+              );
+              continue;
+            }
 
             process.stdout.write("\r".padEnd(48) + "\r");
             logger.print(`${account.label}`);

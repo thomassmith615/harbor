@@ -536,6 +536,45 @@ export function asYou(transcript: string): string {
  * group chat labels people by whatever name resolution produced and a display
  * name may carry a surname the query does not.
  */
+/**
+ * The `said_by` half of a conversation payload.
+ *
+ * Separate from `quotesBy` so a speaker who matched nothing is distinguishable
+ * from a speaker who said nothing. An empty array alone cannot tell those
+ * apart, and a model reading one will report the second.
+ */
+export function quotesFor(transcript: string, speaker: string): Record<string, unknown> {
+  const quotes = quotesBy(transcript, speaker);
+
+  if (quotes.length > 0) {
+    return { said_by: speaker, quotes };
+  }
+
+  return {
+    said_by: speaker,
+    quotes: [],
+    said_by_note:
+      `No lines in this transcript are labelled "${speaker}". Do not conclude they said ` +
+      `nothing: the label may differ from the name you used. The speakers here are ` +
+      `${speakersIn(transcript).join(", ") || "none"}. Retry with one of those.`,
+  };
+}
+
+/** Every distinct speaker label in a transcript, for reporting a miss usefully. */
+export function speakersIn(transcript: string): readonly string[] {
+  const seen = new Set<string>();
+
+  for (const line of transcript.split("\n")) {
+    const split = line.indexOf(": ");
+
+    if (split > 0 && split < 60) {
+      seen.add(line.slice(0, split).trim());
+    }
+  }
+
+  return [...seen];
+}
+
 export function quotesBy(transcript: string, speaker: string): readonly string[] {
   const wanted = speaker.trim().toLowerCase();
   const found: string[] = [];
@@ -555,6 +594,86 @@ export function quotesBy(transcript: string, speaker: string): readonly string[]
   }
 
   return found.slice(0, 40);
+}
+
+/**
+ * Why a conversation search came back empty, in facts.
+ *
+ * Every number here is measured, so the model can tell the three cases apart:
+ * no episodes at all, a person who appears in none, and a query that simply
+ * missed. Those need completely different answers and used to be reported
+ * identically.
+ */
+function emptyConversationDiagnosis(
+  db: DB,
+  params: { readonly personId?: string; readonly query?: string },
+): Record<string, unknown> {
+  const total = (db.prepare(`SELECT COUNT(*) AS n FROM episodes`).get() as { n: number }).n;
+
+  if (total === 0) {
+    return {
+      note:
+        "This store holds no conversations at all. Message sources are grouped into " +
+        "episodes by `harbor dev derive`, which has not produced any. Say that, and do " +
+        "not claim the person said nothing.",
+    };
+  }
+
+  const facts: Record<string, unknown> = { episodes_in_store: total };
+
+  if (params.personId !== undefined) {
+    const reachable = (
+      db
+        .prepare(
+          `SELECT COUNT(DISTINCT ei.episode_id) AS n
+           FROM episode_items ei
+           JOIN item_entities ie ON ie.item_id = ei.item_id
+           WHERE ie.entity_id = ?`,
+        )
+        .get(params.personId) as { n: number }
+    ).n;
+
+    const linkedItems = (
+      db.prepare(`SELECT COUNT(*) AS n FROM item_entities WHERE entity_id = ?`).get(
+        params.personId,
+      ) as { n: number }
+    ).n;
+
+    facts["person_linked_items"] = linkedItems;
+    facts["person_appears_in_episodes"] = reachable;
+
+    if (reachable === 0 && linkedItems > 0) {
+      // The one case worth naming outright, because it is a real gap in the
+      // store rather than a miss: their items exist and none of them landed in
+      // a conversation, so no query will ever reach them by person.
+      facts["note"] =
+        `This person is linked to ${String(linkedItems)} items, but none of those items ` +
+        `belong to a conversation, so filtering conversations by them can never match. ` +
+        `Their messages may not have been grouped into episodes. Search without the ` +
+        `person filter, or use search with person set instead. Do not say the indexing ` +
+        `is incomplete and do not say they have not asked anything.`;
+
+      return facts;
+    }
+
+    if (reachable > 0) {
+      facts["note"] =
+        `This person does appear in ${String(reachable)} conversations, so the query is ` +
+        `what missed, not the person. Retry with different wording or with no query at ` +
+        `all to get their most recent conversations. Do not say the indexing is incomplete.`;
+
+      return facts;
+    }
+  }
+
+  facts["note"] =
+    params.query === undefined
+      ? "Nothing matched, and no query was given. Do not claim indexing is incomplete."
+      : `Nothing matched "${params.query}". The store has conversations; this query missed. ` +
+        `Retry with different wording, or with no query to get the most recent ones. Do ` +
+        `not claim indexing is incomplete.`;
+
+  return facts;
 }
 
 export async function runTool(
@@ -785,12 +904,22 @@ export async function runTool(
     // a file and ambiguous in a payload a model is reading: "me" is whoever is
     // talking. Rendered as "You:" here so there is exactly one reading.
     const saidByInput = String(call.input["said_by"] ?? "").trim();
+
+    // An entity id is what the schema asks for, and a name or a raw handle is
+    // what actually turns up, because the model has the name in front of it and
+    // the id is one tool call away. Falling back to the literal string means
+    // both work.
+    //
+    // The important part is what happens when neither matches. Returning an
+    // empty `quotes` array reads as "that person said nothing", which is a
+    // confident wrong answer of exactly the kind this whole change exists to
+    // stop. So a miss is reported as a miss.
     const saidBy =
       saidByInput.length === 0
         ? null
         : saidByInput.toLowerCase() === "me" || saidByInput.toLowerCase() === "you"
           ? SELF_SPEAKER
-          : (resolveEntity(db, saidByInput)?.displayName ?? null);
+          : (resolveEntity(db, saidByInput)?.displayName ?? saidByInput);
 
     // A conversation is a view over messages, so it goes through the gate like
     // anything else. Withholding here is coarse by design: a redacted line in
@@ -854,7 +983,7 @@ export async function runTool(
         when: humanWhen(episode.endsAt, context.timezone),
         started: humanWhen(episode.startsAt, context.timezone),
         transcript: named,
-        ...(saidBy === null ? {} : { said_by: saidBy, quotes: quotesBy(named, saidBy) }),
+        ...(saidBy === null ? {} : quotesFor(named, saidBy)),
         item_ids: items,
       };
     };
@@ -907,9 +1036,27 @@ export async function runTool(
         described.length === 0
           ? {
               conversations: [],
-              note:
-                "No conversations matched. Message sources are grouped into episodes by " +
-                "`harbor dev derive`; if none exist, nothing conversational has been ingested.",
+              // Facts, not a diagnosis.
+              //
+              // This used to assert a cause: that episodes had not been built
+              // yet. On a store with thousands of them that is simply false,
+              // and a model has no way to know it is false, so it reported
+              // "the conversation indexing hasn't completed yet" to somebody
+              // whose indexing had completed months earlier. A confidently
+              // wrong explanation is worse than no explanation, because it
+              // sends the person to fix something that is not broken.
+              //
+              // So this reports what is actually true of the store and lets
+              // the model draw the conclusion, which is the same discipline
+              // the coverage object already follows.
+              ...emptyConversationDiagnosis(db, {
+                ...(typeof call.input["person"] === "string"
+                  ? { personId: call.input["person"] }
+                  : {}),
+                ...(typeof call.input["query"] === "string"
+                  ? { query: call.input["query"] }
+                  : {}),
+              }),
             }
           : { conversations: described },
         null,

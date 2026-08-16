@@ -62,14 +62,28 @@ export async function syncAccount(
   mode: SyncMode,
   options: AccountSyncOptions,
 ): Promise<readonly StreamReport[]> {
-  const credential = await credentialFor(db, account);
-
+  // Connectors first, credential second, and that order is the fix.
+  //
+  // A connector can be removed from the registry while its account rows stay in
+  // the store, which is exactly what happened to `files` after the card work
+  // was shelved. `credentialFor` then threw "No credential strategy for source
+  // type files" on every sync, and because it ran before this filter it threw
+  // even though there was nothing to sync in the first place.
+  //
+  // An account with no connectors is inert, not broken. Its items stay: those
+  // 742 transactions are load-bearing in half the cross-source situations.
   const connectors = connectorsFor(account.sourceType).filter(
     (connector) =>
       (options.only === undefined || connector.id === options.only) &&
       (options.onlyStreams === undefined ||
         options.onlyStreams.has(`${account.id}/${connector.id}`)),
   );
+
+  if (connectors.length === 0) {
+    return [];
+  }
+
+  const credential = await credentialFor(db, account);
 
   const reports: StreamReport[] = [];
 

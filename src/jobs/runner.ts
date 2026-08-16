@@ -394,6 +394,7 @@ async function run(db: DB, jobId: string, task: JobTask, context: JobContext): P
 
     let changed = 0;
     let touched = 0;
+    const failures: string[] = [];
 
     for (const account of listAccounts(db)) {
       report(db, jobId, { phase: account.label });
@@ -402,31 +403,52 @@ async function run(db: DB, jobId: string, task: JobTask, context: JobContext): P
         return `stopped after ${String(changed)} changes`;
       }
 
-      const reports = await syncAccount(db, account, mode, {
-        timezone: context.timezone,
-        shouldStop: () => stopped(db, jobId),
-        ...(context.target === undefined ? {} : { only: context.target }),
-        ...(owing === null ? {} : { onlyStreams: owing }),
-        onNote: (message) => {
-          report(db, jobId, { note: message });
-        },
-        onProgress: (phase, done, total) => {
-          report(db, jobId, { phase, done, total });
-        },
-      });
+      // One account may not take the others down with it.
+      //
+      // There was no try here, so a single throwing account aborted the whole
+      // pass and every account after it in the list never synced at all. On a
+      // real store that meant a dead `files` connector silently stopping mail,
+      // calendars, reminders, and messages from updating, with nothing saying
+      // so beyond one line of job error. A multi-source sync has to be able to
+      // report a broken source and carry on.
+      try {
+        const reports = await syncAccount(db, account, mode, {
+          timezone: context.timezone,
+          shouldStop: () => stopped(db, jobId),
+          ...(context.target === undefined ? {} : { only: context.target }),
+          ...(owing === null ? {} : { onlyStreams: owing }),
+          onNote: (message) => {
+            report(db, jobId, { note: message });
+          },
+          onProgress: (phase, done, total) => {
+            report(db, jobId, { phase, done, total });
+          },
+        });
 
-      for (const entry of reports) {
-        changed += entry.changed;
-        touched += 1;
+        for (const entry of reports) {
+          changed += entry.changed;
+          touched += 1;
+        }
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+
+        failures.push(`${account.label} (${account.sourceType}): ${detail}`);
+        report(db, jobId, { note: `${account.label} failed: ${detail}` });
       }
     }
 
+    // Failures are named in the result rather than thrown, so the job is
+    // honest about a partial sync. Reporting success on a pass where a source
+    // never ran is how a store quietly stops updating.
+    const trouble =
+      failures.length === 0 ? "" : `; ${String(failures.length)} source(s) failed: ${failures.join("; ")}`;
+
     if (task === "history") {
       const left = needsHistory(db).length;
-      return `${String(changed)} added, ${String(left)} ${left === 1 ? "stream" : "streams"} still filling in`;
+      return `${String(changed)} added, ${String(left)} ${left === 1 ? "stream" : "streams"} still filling in${trouble}`;
     }
 
-    return `${String(changed)} new or changed across ${String(touched)} streams`;
+    return `${String(changed)} new or changed across ${String(touched)} streams${trouble}`;
   }
 
   if (task === "classify") {

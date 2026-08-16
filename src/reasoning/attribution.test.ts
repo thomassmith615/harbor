@@ -13,7 +13,7 @@
  */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { asYou, quotesBy } from "./tools.js";
+import { asYou, quotesBy, quotesFor, speakersIn } from "./tools.js";
 
 const TRANSCRIPT = [
   "Me: heading to the poconos this weekend, airbnb with sam",
@@ -76,5 +76,35 @@ test("speaker attribution", async (t) => {
 
   await t.test("lines without a speaker label are skipped, not guessed at", () => {
     assert.deepEqual(quotesBy("...\nYou: real line", "You"), ["real line"]);
+  });
+
+  await t.test("a speaker who matched nothing is not reported as having said nothing", () => {
+    // The difference that matters. An empty array alone cannot distinguish
+    // "they said nothing" from "that name is not a label in here", and a model
+    // reading one will confidently report the other.
+    const miss = quotesFor(asYou(TRANSCRIPT), "Sam Gutekunst");
+
+    assert.deepEqual(miss["quotes"], []);
+    assert.ok(typeof miss["said_by_note"] === "string");
+    assert.ok(String(miss["said_by_note"]).includes("Isabella Forté"));
+  });
+
+  await t.test("a speaker who did match carries no note", () => {
+    const hit = quotesFor(asYou(TRANSCRIPT), "Isabella Forté");
+
+    assert.equal(hit["said_by_note"], undefined);
+    assert.equal((hit["quotes"] as string[]).length, 2);
+  });
+
+  await t.test("the speakers in a transcript are listed for a retry", () => {
+    assert.deepEqual([...speakersIn(asYou(TRANSCRIPT))], ["You", "Isabella Forté"]);
+  });
+
+  await t.test("a long line without a label is not mistaken for a speaker", () => {
+    // ": " turns up inside ordinary sentences. A speaker label is short.
+    assert.deepEqual(
+      [...speakersIn("You: here is the thing I meant: the whole point of it")],
+      ["You"],
+    );
   });
 });

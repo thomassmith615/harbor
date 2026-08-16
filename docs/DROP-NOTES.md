@@ -1,58 +1,82 @@
-# Attribution, plus two fixes to my own checking
+# One dead source was stopping every other source
 
-Complete file set. Everything from M21, M22, and attribution.
-Pristine-tree verify: **158 tests, 0 failures**.
+166 tests, 0 failures.
 
-## Your last run proved less than it looked like it did
-
-Two of my own mistakes, both of the same kind: a check that reports success
-without testing anything.
-
-**Step 0 was checking the wrong drop.** The marker list was hard-coded in
-`run.sh` and still held the list from two drops earlier. It printed four
-cheerful `ok` lines about M21/M22 and said nothing whatsoever about whether the
-attribution work had landed. There is now a `scripts/markers.txt` that ships
-inside the drop, so the manifest and the code it describes cannot drift apart.
-
-**Nothing verified the build.** Source can be copied without `npm run build`
-taking effect, and then every result below step 1 comes from the previous
-binary while step 0 says everything landed. That is precisely how patch 2
-looked fine for an hour. Step 1 now greps `dist/reasoning/tools.js` for the new
-symbols and dies if src and dist disagree.
-
-**The refusal test never collided.** Twice. `classify` came due, `pulse` had
-already finished, `classify` started normally, and the row said
-`ok started j_...`. A pulse on a caught-up store takes seconds, so the window
-this test needed had closed before the test looked. A check that only passes
-when two things happen to overlap is not a check.
-
-It is now `src/scheduler/tick.test.ts`: insert a running job row, mark a
-schedule due, call `tick`, assert no `last_run_at`, status `skipped`, and a next
-run minutes rather than a day away. Deterministic, no daemon, no waiting, and it
-runs in CI on every drop. Three cases, including one asserting an unblocked task
-still advances normally so the fix cannot silently stop everything running.
-
-## New step 5: attribution, on your data
-
-The one thing that genuinely needs a real store. It pulls your most recent
-conversation through the actual tool path and prints:
+## What was actually happening
 
 ```
-  with        : ["Isabella Forté"]
-  says "Me:"  : false (should be false)
-  says "You:" : true (should be true)
-  your lines  : 4 of 11 total
+j_b2eaaab833af4487  onboard  failed
+             error: No credential strategy for source type files
+j_cc3691a0912b44fb  pulse    failed
+             error: No credential strategy for source type files
 ```
 
-If `says "Me:"` comes back true, the attribution change is not in the binary
-being run, whatever step 0 said.
+Two faults, and the second is much worse than the first.
 
-## Still open, in the order I would take them
+**`credentialFor` ran before the connector filter.** The `files` connector was
+removed from the registry when the card work was shelved; its account row stayed
+in the store. So an account with nothing to sync was still asked to produce a
+credential, and threw.
 
-1. **Plan participants.** The beach-weekend confusion is covered by a prompt
-   rule right now, which is a patch over a missing model. The `gute?` event has
-   Sam on it and not Issy, and Harbor has that data and does not reason with it.
-2. **The venue rule.** Coyote Crossing and Neos: a place name shared across two
-   occasions is evidence of a place, not an occasion.
-3. **launchd.** Still the last thing between you and leaving this running, and
-   still the one thing I cannot verify from here.
+**Nothing caught it.** No try in any of the three sync loops. A single throwing
+account aborted the entire loop, so **every account after it never synced at
+all**. Mail, calendars, reminders, and messages were all quietly not updating
+because of one dead source, with nothing to show for it but a line of job error
+you would only see if you looked at `harbor jobs`.
+
+That is why `harbor update` has not been bringing your texts in. Coverage still
+reads `message ... -> Sat, Aug 15 6:13 PM`.
+
+## Fixed
+
+**Connectors are checked before credentials.** An account whose source type has
+no registered connector returns no work and is skipped. Inert, not broken.
+
+**All three sync loops isolate per account.** Job runner, scheduler, and CLI. A
+failure is named and the loop continues, and the failure is reported in the job
+note rather than swallowed:
+
+```
+1,204 new or changed across 6 streams; 1 source(s) failed: inbox (files): ...
+```
+
+Reporting success on a pass where a source never ran is how a store silently
+stops updating, so a partial sync now says it was partial.
+
+## Your data stays
+
+I did not remove the `files` account and you should not either. Those 742
+`transaction` items came from it, and Coyote Crossing, Wards Berry Farm, Cafe
+Neos, Morgan's Pier, Gypsy Saloon and Curb Phl Taxi are all transactions
+anchoring your best cross-source situations. Deleting the account risks taking
+them with it. An account with no connector is now simply inert and keeps
+everything it brought in.
+
+If you do want Capital One CSVs flowing again later, that is a connector to
+re-add, not an account to recreate.
+
+## Verified
+
+A test that asserts `connectorsFor("files")` is genuinely empty (so it fails
+loudly rather than passing quietly if a files connector is ever re-added), then
+that syncing such an account returns no work instead of throwing.
+
+Then on a real store with the orphaned account present: every account attempted,
+`files threw: false`, and the only throws were network ones this container
+cannot avoid, which is exactly the case the new try/catch exists to contain.
+
+## The reachability question is settled
+
+```
+   7767 Isabella Forté    in   348 conversations
+   2816 Luca D            in   415 conversations
+   2047 Joey Dugery       in   447 conversations
+```
+
+The join is healthy. The earlier UI answer was not a data gap, so whatever went
+wrong there is in retrieval or in how the model used the tool. Worth re-testing
+once your sync is actually current, since you have been asking questions of a
+store that stopped ingesting.
+
+If it still misbehaves, `harbor ask --new --trace "..."` prints every tool call
+and its arguments, which is what I would need next.

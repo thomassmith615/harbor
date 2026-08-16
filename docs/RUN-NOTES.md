@@ -1,55 +1,50 @@
-# run.sh, rewritten
-
-Same checks, restructured so a stale binary can never masquerade as a passing
-result.
-
-## What changed
-
-**The build is now a gate, not a step.** `npm install` and `npm run verify` run
-in the foreground and the script exits if either fails. Everything downstream
-reads `dist/`, so a broken build meant every result below it came from the
-*previous* binary. That is precisely how patch 2 looked like it had landed when
-it had not.
-
-**`harbor --version` and `command -v harbor`** print right after the build, so
-you can see which binary is actually on PATH and whether it matches
-`package.json`.
-
-**Step 0 hard-exits** on a missing marker instead of printing MISSING and
-carrying on.
-
-**Step 7 forces the refusal collision** rather than waiting for 3am. See below.
-
-**Step 8 checks the daemon is actually alive** with `pgrep`, instead of assuming
-it is because nothing printed.
-
-**Step 6 is no longer truncated**, and adds a sweep across every situation for
-edges resting on a single shared word, which is what an over-merge looks like.
-
-## The refusal test was inconclusive last run, not failed
-
-Those four rows:
+# run.sh, two modes
 
 ```
-commit  last Sun, Aug 16, 12:23 PM  ok  skipped: pulse is running
+./run.sh          get current and leave everything running, for using the UI
+./run.sh --check  the full verification pass, for after a code drop
 ```
 
-were written at 12:23. You installed the patch at 12:49. They are daily
-schedules, so nothing has touched them since and nothing will until 3am. The
-list was showing pre-patch state, not post-patch behaviour.
+Both kill any daemon they find first, so both are safe to re-run with nothing to
+undo in between.
 
-Step 7 now forces it: `classify` conflicts with `pulse`, so it schedules
-`classify` every minute, starts a pulse, waits for the collision, and prints the
-row.
+## Default mode, in order, and why that order
 
-- **Pre-patch:** `last <now> ok skipped: pulse is running`, next run a full
-  interval away.
-- **Post-patch:** no `last`, status `skipped`, next run about 5 minutes out.
+**Ollama first.** Before anything touches the pipeline. Without it `derive`
+returns `skipped: no embedding backend` and does nothing, semantic search
+silently falls back to keyword-only, and the UI looks like it has lost your
+history. That is not a hypothetical; it is what sent us looking at the iMessage
+connector for an afternoon. The script starts it, waits for it to answer, and
+dies if `nomic-embed-text` is not pulled.
 
-It removes the temporary schedule afterwards.
+**Build gate.** Quiet unless it fails.
 
-## The daemon did not die
+**Daemon before the sync.** `harbor update` enqueues an onboard job and the
+daemon is what runs it. Started first, the work shows up in `harbor jobs` and
+survives this script exiting.
 
-`[1]+ Done` at the end of your output was the daemon you started **manually at
-12:43**, killed by `pkill` at the top of the script. The one the script started
-was almost certainly still running. Step 8 now proves it either way.
+**`harbor update`, then wait.** onboard is recent sync, then classify, derive,
+resolve, relate, signals. Recent messages land first so Harbor is answerable
+within a minute or two while older history fills in behind. The script polls
+`harbor jobs` until nothing is running, up to about 7 minutes, then prints the
+job list either way rather than blocking forever. It only inspects the most
+recent few jobs, because an older one orphaned in `running` would otherwise hold
+the loop open for its whole budget.
+
+**Then what you need for the UI:** the localhost URL, the LAN URL with your
+actual current address (it changed from 192.168.6.20 to 10.0.0.54 between two of
+your runs, so it is read fresh each time), and a **fresh pairing code**. The
+built-in page redeems one at `/pair`. Single use and short-lived, which beats
+hunting for an old token. Issued with `--act` to match your existing devices.
+
+## --check mode
+
+Everything above, then the three verification blocks: marker manifest and the
+src-versus-dist comparison, the two-directional attribution assertion, and
+situations plus doctor. Use it after a drop; skip it when you just want to test.
+
+## Coverage is printed on purpose
+
+The status block prints the coverage table before handing you the URL, so you
+can see how far back each kind actually reaches before you start judging
+answers. A confidently incomplete answer looks exactly like a wrong one.
