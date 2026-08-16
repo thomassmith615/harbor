@@ -25,6 +25,9 @@ import {
   connectionsFor,
   threadNodes,
   topThreads,
+  getThread,
+  renameThread,
+  setThreadState,
 } from "../store/relationships.js";
 import { explain, relate } from "../derive/relate.js";
 import { getEpisode, episodeItems } from "../store/episodes.js";
@@ -53,6 +56,7 @@ import * as nodeFs from "node:fs";
 import * as nodePath from "node:path";
 import * as nodeUrl from "node:url";
 import { backup, encryptedBackup, restoreBackup } from "../kernel/backup.js";
+import { pruneBackups, rotateLogs } from "../kernel/housekeeping.js";
 import { doctor } from "../surfaces/doctor.js";
 import { preflight } from "../surfaces/preflight.js";
 import { proposeFacts, factCandidates } from "../derive/facts.js";
@@ -126,7 +130,7 @@ import { startApi } from "../surfaces/api.js";
 import { advertise } from "../surfaces/discovery.js";
 import { currentFingerprint, ensureTls, tlsAvailable } from "../kernel/tls.js";
 import { problems, setupState } from "../surfaces/setup.js";
-import { enqueue, JOB_TASKS, stop, stopAll } from "../jobs/runner.js";
+import { CONFLICTS, enqueue, JOB_TASKS, stop, stopAll, undeclaredPairs } from "../jobs/runner.js";
 import {
   clearHandle,
   delegateJob,
@@ -180,6 +184,32 @@ const tz = timezone();
 
 function when(ms: number | null): string {
   return ms === null ? "never" : humanWhen(ms, tz);
+}
+
+/**
+ * How long Harbor has been watching a situation, and when it last moved.
+ *
+ * Printed because it is the thing a situation could not previously say. "Harbor
+ * has been following this for three weeks and something joined it yesterday" is
+ * a different statement from "here is a cluster", and until identity survived a
+ * rebuild there was no way to make it.
+ */
+function describeHistory(thread: {
+  readonly firstSeenAt: number | null;
+  readonly lastChangedAt: number | null;
+}): string {
+  if (thread.firstSeenAt === null) {
+    return "";
+  }
+
+  const days = Math.floor((Date.now() - thread.firstSeenAt) / 86_400_000);
+  const followed = days < 1 ? "new today" : `following for ${String(days)}d`;
+
+  if (thread.lastChangedAt === null || Date.now() - thread.lastChangedAt > 86_400_000) {
+    return `  (${followed})`;
+  }
+
+  return `  (${followed}, changed ${when(thread.lastChangedAt)})`;
 }
 
 /**
@@ -615,6 +645,43 @@ async function main(): Promise<number> {
     .command("dev")
     .description("Pipeline stages and inspection tools, for working on Harbor itself");
 
+  dev
+    .command("conflicts")
+    .description("Which scheduled tasks may not run at the same time")
+    .action(() => {
+      const inferred = new Set(undeclaredPairs().map(([a, b]) => `${a}|${b}`));
+
+      logger.print("Tasks that may not run concurrently. * was inferred by symmetry.");
+      logger.print("");
+
+      for (const task of JOB_TASKS) {
+        const others = CONFLICTS[task]
+          .filter((other) => other !== task)
+          .map((other) => (inferred.has(`${other}|${task}`) ? `${other}*` : other));
+
+        logger.print(`  ${task.padEnd(10)} ${others.length === 0 ? "(nothing)" : others.join(", ")}`);
+      }
+
+      logger.print("");
+      logger.print(
+        `${String(undeclaredPairs().length)} pair(s) were declared from one side only. ` +
+          "Both sides are enforced.",
+      );
+    });
+
+  dev
+    .command("rotate-logs")
+    .description("Rotate oversized daemon logs now")
+    .action(() => {
+      const report = rotateLogs();
+
+      logger.print(
+        report.rotated.length === 0
+          ? "Nothing large enough to rotate."
+          : `Rotated ${report.rotated.join(", ")}, removed ${String(report.removed)} old generation(s).`,
+      );
+    });
+
   // How Harbor behaves, in one place.
   //
   // Schedules, egress policy, detectors, account weight, router tiers, spend,
@@ -672,6 +739,15 @@ async function main(): Promise<number> {
         addSchedule(db, { principalId: DEFAULT_PRINCIPAL, task: "digest", atHour: 7, atMinute: 0, timezone: tzNow });
         addSchedule(db, { principalId: DEFAULT_PRINCIPAL, task: "backup", atHour: 4, atMinute: 0, timezone: tzNow });
 
+        // History was never scheduled, which quietly made "older history fills
+        // in behind you" a thing that only happened if somebody typed it. On an
+        // appliance that meant the store stayed permanently pinned to the
+        // recent window: current, and shallow, forever.
+        //
+        // Small hours, and it deliberately does not block derivation, so Harbor
+        // stays answerable while a decade arrives behind it.
+        addSchedule(db, { principalId: DEFAULT_PRINCIPAL, task: "history", atHour: 1, atMinute: 30, timezone: tzNow });
+
         scheduled = true;
       }
 
@@ -687,7 +763,8 @@ async function main(): Promise<number> {
         `Policy         ${seeded === 0 ? "built-in rules present" : `seeded ${String(seeded)} built-in rules`}`,
       );
       if (scheduled) {
-        logger.print("Schedules      pulse every 15m, derive and commit overnight, digest at 7am");
+        logger.print("Schedules      pulse every 15m, history and the heavy passes overnight,");
+        logger.print("               digest at 7am, backup and housekeeping at 4am");
         logger.print("               (`harbor settings schedule` to change or disable any of it)");
       }
 
@@ -1040,12 +1117,18 @@ async function main(): Promise<number> {
       logger.print(report.sample ?? "(none)");
     });
 
-  program
+  const situations = program
     .command("situations")
-    .description("Things spanning more than one source")
+    .description("Things spanning more than one source");
+
+  situations
+    .command("list", { isDefault: true })
+    .description("Open situations, most salient first")
     .option("-n, --limit <count>", "how many", "10")
     .option("--days <days>", "only those active in the last N days")
-    .action((options: { limit: string; days?: string }) => {
+    .option("--new", "only those whose membership changed in the last day")
+    .option("--all", "include resolved and dismissed")
+    .action((options: { limit: string; days?: string; new?: boolean; all?: boolean }) => {
       const { db } = openDatabase();
 
       try {
@@ -1055,23 +1138,32 @@ async function main(): Promise<number> {
         const found = topThreads(db, DEFAULT_PRINCIPAL, {
           limit: Number.isFinite(limit) ? limit : 10,
           minSources: 2,
+          ...(options.all === true ? { states: ["open", "resolved", "dismissed"] as const } : {}),
+          ...(options.new === true ? { changedSince: Date.now() - 86_400_000 } : {}),
           ...(days === null || !Number.isFinite(days)
             ? {}
             : { since: Date.now() - days * 86_400_000 }),
         });
 
         if (found.length === 0) {
-          logger.print("Nothing spanning more than one source yet.");
+          logger.print(
+            options.new === true
+              ? "Nothing changed in the last day."
+              : "Nothing spanning more than one source yet.",
+          );
           logger.print("Needs `harbor dev relate` to have run, and more than one source connected.");
           return;
         }
 
         for (const thread of found) {
-          logger.print(`${thread.title ?? "(unnamed)"}`);
+          const mark = thread.state === "open" ? "" : `  [${thread.state}]`;
+
+          logger.print(`${thread.title ?? "(unnamed)"}${mark}`);
           logger.print(
             `  ${String(thread.itemCount)} things across ${String(thread.sourceCount)} sources` +
               `  ${when(thread.startsAt)} to ${when(thread.endsAt)}`,
           );
+          logger.print(`  ${thread.id}${describeHistory(thread)}`);
 
           for (const ref of threadNodes(db, thread.id).slice(0, 6)) {
             const node = summarize(db, ref);
@@ -1091,6 +1183,61 @@ async function main(): Promise<number> {
 
           logger.print("");
         }
+      } finally {
+        db.close();
+      }
+    });
+
+  for (const [verb, state, said] of [
+    ["resolve", "resolved", "Marked resolved"],
+    ["dismiss", "dismissed", "Dismissed"],
+    ["reopen", "open", "Reopened"],
+  ] as const) {
+    situations
+      .command(verb)
+      .argument("<id>", "situation id")
+      .description(
+        verb === "reopen"
+          ? "Put a closed situation back in play"
+          : `Mark a situation ${state}, permanently`,
+      )
+      .action((id: string) => {
+        const { db } = openDatabase();
+
+        try {
+          if (!setThreadState(db, id, state)) {
+            logger.warn(`no situation ${id}`);
+            return;
+          }
+
+          logger.print(`${said}.`);
+
+          if (verb === "dismiss") {
+            // Stated plainly because the alternative is somebody expecting it
+            // to come back on its own and concluding Harbor forgot.
+            logger.print("It stays dismissed even as it grows. `harbor situations reopen` undoes it.");
+          }
+        } finally {
+          db.close();
+        }
+      });
+  }
+
+  situations
+    .command("rename")
+    .argument("<id>", "situation id")
+    .argument("<title>", "what to call it")
+    .description("Give a situation a name of your own")
+    .action((id: string, title: string) => {
+      const { db } = openDatabase();
+
+      try {
+        if (!renameThread(db, id, title)) {
+          logger.warn(`no situation ${id}`);
+          return;
+        }
+
+        logger.print("Renamed. No later pass will overwrite it.");
       } finally {
         db.close();
       }
@@ -1834,7 +1981,7 @@ async function main(): Promise<number> {
   // by knowing that a pipeline stage had an option on it.
   program
     .command("why")
-    .argument("<id>", "an item id, or an episode id beginning ep_")
+    .argument("<id>", "an item id, an episode id (ep_), or a situation id (sit_)")
     .option("-n, --limit <count>", "how many candidates to show")
     .option("--all", "every candidate considered")
     .option("--linked", "only the ones an edge was actually drawn to")
@@ -1843,6 +1990,77 @@ async function main(): Promise<number> {
       const { db } = openDatabase();
 
       try {
+        // Situations are the ids people actually see now: `harbor situations`
+        // prints one under every heading, and a digest will cite them. Before
+        // this, pasting one back in got "No such item or conversation", which
+        // is the worst possible answer to somebody following an id Harbor
+        // itself just handed them.
+        //
+        // A situation is not a graph subject, so there is nothing to explain
+        // about it directly. What there is to explain is each node in it, and
+        // that is what somebody asking "why are these together" wants anyway.
+        if (id.startsWith("sit_")) {
+          const situation = getThread(db, id);
+
+          if (situation === null) {
+            logger.print(`No situation ${id}.`);
+            return;
+          }
+
+          const members = threadNodes(db, id);
+
+          logger.print(`${situation.title ?? "(unnamed)"}  [${situation.state}]`);
+          logger.print(
+            `  ${String(members.length)} nodes across ${String(situation.sourceCount)} sources` +
+              `${describeHistory(situation)}`,
+          );
+          logger.print("");
+          logger.print("What holds it together, node by node:");
+          logger.print("");
+
+          for (const ref of members) {
+            const node = summarize(db, ref);
+            const detail = explain(db, ref, DEFAULT_PRINCIPAL, timezone());
+
+            logger.print(`  ${nodeKey(ref)}`);
+            logger.print(`    ${(node?.title ?? "(untitled)").slice(0, 64)}`);
+
+            if (detail === null) {
+              logger.print("    (nothing recorded)");
+              logger.print("");
+              continue;
+            }
+
+            logger.print(`    people      ${detail.people.join(", ") || "none resolved"}`);
+            logger.print(`    references  ${detail.references.join(", ") || "none"}`);
+            logger.print(
+              `    rare words  ${detail.distinctive.slice(0, 8).join(", ") || "none distinctive"}`,
+            );
+
+            const linked = detail.candidates.filter((candidate) => candidate.drawn.length > 0);
+
+            for (const candidate of linked.slice(0, 6)) {
+              const kinds = candidate.drawn.map((edge) => edge.kind).join(", ");
+
+              logger.print(
+                `    -> ${kinds.padEnd(18)} ${(candidate.title ?? candidate.key).slice(0, 40)}`,
+              );
+
+              // The evidence, not just the verdict. This is the whole reason
+              // the explain path exists: an over-merge and a correct link look
+              // identical until you can see the word they shared.
+              for (const edge of candidate.drawn.slice(0, 2)) {
+                logger.print(`       ${edge.evidence.slice(0, 70)}`);
+              }
+            }
+
+            logger.print("");
+          }
+
+          logger.print(`\`harbor why <node-id>\` for the full candidate list on any one of them.`);
+          return;
+        }
+
         const result = explain(db, parseNodeRef(id), DEFAULT_PRINCIPAL, timezone());
 
         if (result === null) {
@@ -1957,6 +2175,26 @@ async function main(): Promise<number> {
         }
 
         logger.print(`Situations     ${String(report.threads.threads)} across more than one source`);
+
+        // What identity actually did this pass. Without these the whole point
+        // of durable situations is invisible from outside: "47 situations"
+        // reads exactly the same whether they were carried forward or rebuilt
+        // from scratch, which is the difference the work was for.
+        const t = report.threads;
+
+        logger.print(
+          `  carried      ${String(t.carried)}` +
+            (t.changed > 0 ? ` (${String(t.changed)} changed)` : "") +
+            `, new ${String(t.created)}`,
+        );
+
+        if (t.merged > 0 || t.retired > 0 || t.keptForState > 0) {
+          logger.print(
+            `  merged ${String(t.merged)}, retired ${String(t.retired)}` +
+              `, kept for your decisions ${String(t.keptForState)}`,
+          );
+        }
+
         logger.print(`Remaining      ${String(report.remaining)}`);
         logger.print(`Took           ${formatDuration(report.durationMs)}`);
       } finally {
@@ -4290,10 +4528,32 @@ async function main(): Promise<number> {
     .option("--encrypt", "encrypt it with a passphrase you supply")
     .option("--passphrase <value>", "for scripts; prompts when omitted")
     .option("--plain", "acknowledge writing an unencrypted copy")
-    .action(async (path: string | undefined, options: { encrypt?: boolean; passphrase?: string; plain?: boolean }) => {
+    .option("--prune", "apply retention to existing backups instead of writing one")
+    .option("--dry-run", "with --prune, show what would go without removing it")
+    .action(async (path: string | undefined, options: { encrypt?: boolean; passphrase?: string; plain?: boolean; prune?: boolean; dryRun?: boolean }) => {
       const { db } = openDatabase();
 
       try {
+        if (options.prune === true) {
+          const report = pruneBackups(Date.now(), options.dryRun === true);
+
+          if (report.removed === 0) {
+            logger.print(`Nothing to prune. ${String(report.kept)} backup(s) kept.`);
+            return;
+          }
+
+          logger.print(
+            `${options.dryRun === true ? "Would remove" : "Removed"} ${String(report.removed)}, ` +
+              `freeing ${formatBytes(report.bytesFreed)}. ${String(report.kept)} kept.`,
+          );
+
+          for (const name of report.files.slice(0, 20)) {
+            logger.print(`  ${name}`);
+          }
+
+          return;
+        }
+
         if (options.encrypt === true || options.passphrase !== undefined) {
           const passphrase =
             options.passphrase ?? (await promptHidden("Passphrase (you will need this to restore): "));

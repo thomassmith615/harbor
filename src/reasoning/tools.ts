@@ -37,7 +37,7 @@
  * has to understand, and a thing that can go wrong silently.
  */
 import { humanWhen, localIso } from "../kernel/time.js";
-import { lookupEntities } from "../store/entities.js";
+import { lookupEntities, resolveEntity } from "../store/entities.js";
 import { composeBrief } from "../derive/brief.js";
 import { connectionsFor, threadNodes, topThreads } from "../store/relationships.js";
 import { nodeKey, parseNodeRef, summarize } from "../store/nodes.js";
@@ -243,7 +243,13 @@ export const TOOLS: readonly ToolSchema[] = [
       "Use this for anything about what was discussed, planned, suggested, or agreed in " +
       "messages. Returns a transcript for each match. For anything about a named person, " +
       "call `find_person` first and pass the id as `person`, with or without a query: the " +
-      "name will not be in the text, so a query alone will miss everything.",
+      "name will not be in the text, so a query alone will miss everything. " +
+      "CRITICAL: a transcript is two or more people talking. Every line is labelled with " +
+      "who said it, and `You:` is the user. Something the user said is NOT evidence about " +
+      "the other person: if the user says \"can't wait for the hot tub\" to someone, that " +
+      "tells you about the user's plans, not that person's. For any question about what " +
+      "someone else likes, wants, said, or is doing, pass `said_by` with their entity id " +
+      "and read the `quotes` array, which contains only their own words.",
     input_schema: {
       type: "object",
       properties: {
@@ -251,7 +257,19 @@ export const TOOLS: readonly ToolSchema[] = [
           type: "string",
           description: "What the conversation was about. Omit for the most recent ones.",
         },
-        person: { type: "string", description: "An entity id from find_person." },
+        person: {
+          type: "string",
+          description:
+            "An entity id from find_person. Finds conversations they took part in. Taking " +
+            "part is not the same as saying something: use said_by for that.",
+        },
+        said_by: {
+          type: "string",
+          description:
+            "An entity id from find_person, or \"me\" for the user. Adds a `quotes` array " +
+            "holding only the lines that person actually spoke. Use this whenever the " +
+            "question is about one person rather than about the conversation.",
+        },
         since: { type: "string", description: "ISO 8601. Only conversations active after this." },
         limit: { type: "integer", description: "How many, default 6." },
       },
@@ -491,6 +509,54 @@ function describeCoverage(db: DB, context: ToolContext): Record<string, unknown>
  * Async because a semantic query has to be embedded first. Everything else here
  * is a synchronous SQLite read.
  */
+/**
+ * How the user's own lines are labelled in a payload a model reads.
+ *
+ * Stored transcripts say "Me:", which is unambiguous in a file and not in a
+ * tool result: "me" is whoever happens to be speaking. A model reading a
+ * conversation whose `with` field says "Isabella Forté" reasonably reads the
+ * whole thing as hers, which is how Harbor came to believe the user was going
+ * on a beach weekend with someone he had merely told about a hot tub.
+ */
+export const SELF_SPEAKER = "You";
+
+export function asYou(transcript: string): string {
+  return transcript.replace(/^Me:/gm, `${SELF_SPEAKER}:`);
+}
+
+/**
+ * Only the lines one person actually spoke.
+ *
+ * The transcript keeps its labels either way; this is an additional, explicit
+ * answer to "what did *they* say", so a model asked what someone likes reads
+ * that person's own words rather than inferring from a conversation they were
+ * merely present for.
+ *
+ * Speaker matching is by prefix on the label rather than equality, because a
+ * group chat labels people by whatever name resolution produced and a display
+ * name may carry a surname the query does not.
+ */
+export function quotesBy(transcript: string, speaker: string): readonly string[] {
+  const wanted = speaker.trim().toLowerCase();
+  const found: string[] = [];
+
+  for (const line of transcript.split("\n")) {
+    const split = line.indexOf(": ");
+
+    if (split <= 0) {
+      continue;
+    }
+
+    const label = line.slice(0, split).trim().toLowerCase();
+
+    if (label === wanted || label.startsWith(`${wanted} `) || wanted.startsWith(`${label} `)) {
+      found.push(line.slice(split + 2).trim());
+    }
+  }
+
+  return found.slice(0, 40);
+}
+
 export async function runTool(
   db: DB,
   context: ToolContext,
@@ -713,6 +779,19 @@ export async function runTool(
   if (call.name === "conversations" || call.name === "conversation") {
     const gate = Gate.open(db);
 
+    // Who the caller is asking about, as that person appears in a transcript.
+    //
+    // The label for the user's own lines is "Me:" in storage, which is fine in
+    // a file and ambiguous in a payload a model is reading: "me" is whoever is
+    // talking. Rendered as "You:" here so there is exactly one reading.
+    const saidByInput = String(call.input["said_by"] ?? "").trim();
+    const saidBy =
+      saidByInput.length === 0
+        ? null
+        : saidByInput.toLowerCase() === "me" || saidByInput.toLowerCase() === "you"
+          ? SELF_SPEAKER
+          : (resolveEntity(db, saidByInput)?.displayName ?? null);
+
     // A conversation is a view over messages, so it goes through the gate like
     // anything else. Withholding here is coarse by design: a redacted line in
     // the middle of a transcript would read as though the person never said it.
@@ -765,6 +844,8 @@ export async function runTool(
       // participant list and the transcript's speaker labels were whatever the
       // source called them. Harbor had 1,403 resolved people and 2,700
       // identifiers and answered with a table of digits.
+      const named = asYou(nameTranscript(db, outcome.value));
+
       return {
         id: episode.id,
         with: episode.participants.map((handle) => nameForHandle(db, handle) ?? handle),
@@ -772,7 +853,8 @@ export async function runTool(
         messages: episode.messageCount,
         when: humanWhen(episode.endsAt, context.timezone),
         started: humanWhen(episode.startsAt, context.timezone),
-        transcript: nameTranscript(db, outcome.value),
+        transcript: named,
+        ...(saidBy === null ? {} : { said_by: saidBy, quotes: quotesBy(named, saidBy) }),
         item_ids: items,
       };
     };

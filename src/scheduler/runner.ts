@@ -23,7 +23,7 @@ import { resolveEntities } from "../derive/entities.js";
 import { syncAccount } from "../connectors/dispatch.js";
 import { enqueue } from "../jobs/runner.js";
 import { listAccounts } from "../store/accounts.js";
-import { dueSchedules, recordRun, shouldDefer } from "./schedule.js";
+import { dueSchedules, recordRefusal, recordRun, shouldDefer } from "./schedule.js";
 import type { DB } from "../kernel/db.js";
 import type { Embedder } from "../derive/embed/index.js";
 import type { Logger } from "../kernel/logger.js";
@@ -72,6 +72,17 @@ export async function runTask(
   }
 
   return started.job === null ? "refused" : `started ${started.job.id}`;
+}
+
+/**
+ * Whether a note from `runTask` describes a refusal rather than a run.
+ *
+ * A string match, which is not lovely, but `runTask` is called from three
+ * places and widening its return type would ripple further than this fix is
+ * worth. The two producers are directly above; the test pins them.
+ */
+export function isRefusal(note: string): boolean {
+  return note.startsWith("skipped: ") || note === "refused" || note === "already running";
 }
 
 /** The old direct path, kept for `harbor dev run` where a person is watching. */
@@ -257,6 +268,15 @@ export async function tick(db: DB, context: RunnerContext, now = Date.now()): Pr
 
     try {
       const note = await runTask(db, schedule.task, context, schedule.target);
+
+      if (isRefusal(note)) {
+        // Something else holds the lock. Come back shortly rather than
+        // surrendering the slot, and do not record it as a run.
+        recordRefusal(db, schedule, context.timezone, note);
+        context.logger.info(`[${new Date().toISOString()}] ${schedule.task}: ${note}, retrying`);
+        continue;
+      }
+
       recordRun(db, schedule, context.timezone, "ok", note);
       ran.push({ task: schedule.task, note });
       context.logger.info(`[${new Date().toISOString()}] ${schedule.task}: ${note}`);

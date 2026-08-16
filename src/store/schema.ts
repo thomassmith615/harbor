@@ -1341,6 +1341,97 @@ export const MIGRATIONS: readonly string[] = [
   ALTER TABLE observations ADD COLUMN detector_version INTEGER;
   CREATE INDEX observations_detector_version ON observations (detector_version);
   `,
+
+  // 025: a situation is a thing, not a fingerprint of its contents.
+  //
+  // The id used to be sha256 of the sorted member set. That was the second
+  // attempt (the first was random, which changed the id every few minutes and
+  // orphaned everything holding one), and it fixed the wrong half of the
+  // problem. A hash is stable while a situation is, and a situation is never
+  // stable: one more text joins the crabbing weekend and the id changes, so
+  // the row is deleted and a different one appears in its place.
+  //
+  // What that actually broke, in the code as it stands:
+  //
+  //   detectors.ts keys the observation "loose:<thread_id>", so one you
+  //   dismissed comes back under a new key the moment the situation grows.
+  //   From the outside that is Harbor nagging about something you already
+  //   dealt with, the fastest way there is to lose someone's attention.
+  //
+  //   Nothing could be renamed, resolved, or dismissed, because there was
+  //   nothing durable to attach the decision to.
+  //
+  //   An id printed for a person yesterday resolves to nothing today.
+  //
+  // So identity moves off the contents entirely. Ids are minted once and
+  // carried forward by membership overlap; see src/derive/situations.ts for
+  // the matching rules and why they are what they are.
+  //
+  // Existing rows are discarded rather than migrated. They are content hashes
+  // with no state, no history, and no user decisions attached, so there is
+  // nothing in them worth keeping, and the next relate pass rebuilds the lot
+  // from edges that are untouched by this migration.
+  `
+  DELETE FROM thread_nodes;
+  DELETE FROM threads;
+
+  -- open is Harbor's opinion; resolved and dismissed are the person's, and
+  -- neither is ever overwritten by a later pass.
+  ALTER TABLE threads ADD COLUMN state TEXT NOT NULL DEFAULT 'open'
+    CHECK (state IN ('open', 'resolved', 'dismissed'));
+
+  -- A title the person wrote outranks a title Harbor took from an event, and
+  -- has to survive every subsequent rebuild.
+  ALTER TABLE threads ADD COLUMN title_source TEXT NOT NULL DEFAULT 'derived'
+    CHECK (title_source IN ('derived', 'user'));
+
+  ALTER TABLE threads ADD COLUMN state_changed_at INTEGER;
+
+  -- When Harbor first saw this situation at all, as opposed to when it last
+  -- wrote the row. The distinction is the whole point: a situation that has
+  -- been accumulating for three weeks is a different thing from one that
+  -- appeared this morning, and until now both looked identical.
+  ALTER TABLE threads ADD COLUMN first_seen_at INTEGER;
+
+  -- When its membership last actually changed. updated_at moves on every
+  -- pass; this moves only when something joined or left, which is what
+  -- "what is new since yesterday" has to be asked against.
+  ALTER TABLE threads ADD COLUMN last_changed_at INTEGER;
+
+  -- Fingerprint of the current membership. Not an identity any more, just a
+  -- cheap way to tell a real change from a no-op rebuild.
+  ALTER TABLE threads ADD COLUMN node_digest TEXT;
+
+  CREATE INDEX threads_state ON threads (principal_id, state, salience DESC);
+  CREATE INDEX threads_changed ON threads (principal_id, last_changed_at DESC);
+  `,
+
+  // 026: strip the message count out of episode titles written before it was
+  // removed from the generator.
+  //
+  // `titleFor` in derive/episodes.ts stopped baking the count in, but nothing
+  // retitled the episodes that already had it, and episodes are only rewritten
+  // when they are pending. So a real store still shows:
+  //
+  //   +16103080665 (8 messages) (8 messages)
+  //
+  // where the surface added its own on top of the stored one.
+  //
+  // Cosmetic on the face of it, and not only cosmetic underneath. `isHandleTitle`
+  // decides whether a title is a bare phone number, and a phone number with a
+  // parenthetical stuck on the end does not look like one. So stale episodes win
+  // the naming contest in `titleFor` over genuine subject lines, which is how a
+  // situation ends up titled "+15164594704, +12016005231, +19258959859, ...".
+  //
+  // `instr` finds the first ' (', which strips both copies in one pass. Episode
+  // titles are participant lists joined with ", " and never legitimately contain
+  // a parenthesis, so there is nothing else this can catch.
+  `
+  UPDATE episodes
+  SET title = rtrim(substr(title, 1, instr(title, ' (') - 1))
+  WHERE title GLOB '* (*message*)'
+    AND instr(title, ' (') > 1;
+  `,
 ];
 
 /** The only principal that exists until household support lands. */

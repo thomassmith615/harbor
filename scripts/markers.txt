@@ -1,0 +1,14 @@
+# Strings that exist only in the current drop, checked by run.sh.
+# Ships with the drop so the two can never drift apart, which is exactly what
+# happened when run.sh kept a hard-coded list from two drops earlier and
+# cheerfully reported "the patch landed" about the wrong patch.
+#
+# needle:path
+recordRefusal:src/scheduler/schedule.ts
+isRefusal:src/scheduler/runner.ts
+carried:src/cli/main.ts
+sit_:src/cli/main.ts
+said_by:src/reasoning/tools.ts
+SELF_SPEAKER:src/reasoning/tools.ts
+quotesBy:src/reasoning/tools.ts
+Who said a thing decides:src/reasoning/ask.ts

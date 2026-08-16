@@ -125,7 +125,18 @@ Guidance:
   to one real-world thing, and it is the only view that shows the whole picture; a search
   returns three fragments of it and leaves the person to reassemble them.
 - After finding something relevant, calling related on it often finds where the answer
-  actually is.`;
+  actually is.
+- Who said a thing decides what it is evidence of. A transcript labels every line with its
+  speaker, and \`You:\` is the user. A line the user spoke says nothing about the other
+  person: telling someone about a trip is not evidence that person is going, and mentioning
+  a thing you like is not evidence they like it. For any question about what another person
+  likes, wants, plans, or said, pass said_by to conversations and answer from the quotes it
+  returns. If the only support you have for a claim about someone is a line the user spoke,
+  you do not have support for it: say what the user said instead.
+- Being on a plan and being told about a plan are different. An event's attendees are on it.
+  Someone the user texted about it is not, unless something says otherwise. Do not put a
+  person on a trip, a dinner, or a weekend because they were in a conversation where it came
+  up.`;
 }
 
 export interface AskOptions {

@@ -9,6 +9,7 @@
  * an id back immediately; progress lands in the database.
  */
 import { backup } from "../kernel/backup.js";
+import { pruneBackups, rotateLogs } from "../kernel/housekeeping.js";
 import { classifyItems } from "../derive/classify.js";
 import { createEmbedder } from "../derive/embed/index.js";
 import { derive, reindex } from "../derive/pipeline.js";
@@ -81,7 +82,7 @@ export interface JobContext {
  */
 const INGEST: readonly JobTask[] = ["onboard", "pulse", "sync", "recent", "history", "backfill"];
 
-const CONFLICTS: Readonly<Record<JobTask, readonly JobTask[]>> = {
+const DECLARED: Readonly<Record<JobTask, readonly JobTask[]>> = {
   // The whole sequence. Nothing else may run alongside it.
   onboard: [...INGEST, "classify", "derive", "resolve", "commit", "extract", "signals"],
   // The appliance loop: a small incremental sync followed by derivation of
@@ -125,6 +126,82 @@ const CONFLICTS: Readonly<Record<JobTask, readonly JobTask[]>> = {
   backup: ["backup"],
   reindex: ["onboard", "pulse", "derive", "reindex"],
 };
+
+/**
+ * The declarations above, made symmetric.
+ *
+ * `blockedBy` only ever consulted `CONFLICTS[incoming]`, which quietly assumed
+ * every pair was declared from both sides. Twenty of them were not, and the
+ * consequences were not theoretical:
+ *
+ *   `relate` declared a conflict with `pulse`, and `pulse` did not declare one
+ *   with `relate`. `pulse` runs relate internally as one of its seven steps.
+ *   So a long relate pass did not stop the fifteen-minute pulse from starting,
+ *   and two relate passes ran concurrently over the same edge and situation
+ *   tables. On an appliance with a pulse schedule that is not a rare race, it
+ *   is what happens every time relate takes more than fifteen minutes, which
+ *   on a first full store it always does.
+ *
+ *   Same shape for `notice`, `extract`, `reindex` against `pulse`, and for
+ *   `commit` against `derive` and `resolve`.
+ *
+ * Making the closure symmetric rather than fixing twenty entries by hand is
+ * deliberate: a hand-maintained table drifts the moment somebody adds a task,
+ * and this one already had. A conflict is a statement about a pair, so either
+ * side may declare it and both sides are bound by it.
+ *
+ * What this costs: `pulse` is now genuinely refused while `extract` (4:30am)
+ * or `notice` (5:00am) is running. That is the correct behaviour and it is
+ * visible, because a refused schedule is recorded as skipped with the blocker
+ * named. If those windows grow long enough to matter, the answer is to bound
+ * them, not to let the passes overlap.
+ */
+function symmetric(
+  declared: Readonly<Record<JobTask, readonly JobTask[]>>,
+): Readonly<Record<JobTask, readonly JobTask[]>> {
+  const sets = new Map<JobTask, Set<JobTask>>();
+
+  for (const task of JOB_TASKS) {
+    sets.set(task, new Set<JobTask>());
+  }
+
+  for (const task of JOB_TASKS) {
+    for (const other of declared[task] ?? []) {
+      sets.get(task)?.add(other);
+      sets.get(other)?.add(task);
+    }
+  }
+
+  const closed: Partial<Record<JobTask, readonly JobTask[]>> = {};
+
+  for (const task of JOB_TASKS) {
+    closed[task] = [...(sets.get(task) ?? new Set<JobTask>())].sort();
+  }
+
+  return closed as Record<JobTask, readonly JobTask[]>;
+}
+
+export const CONFLICTS = symmetric(DECLARED);
+
+/**
+ * Pairs where only one side declared the conflict.
+ *
+ * Exported so a test can assert the closure is doing something and so
+ * `harbor dev conflicts` can show what was inferred rather than written down.
+ */
+export function undeclaredPairs(): readonly (readonly [JobTask, JobTask])[] {
+  const found: (readonly [JobTask, JobTask])[] = [];
+
+  for (const task of JOB_TASKS) {
+    for (const other of DECLARED[task] ?? []) {
+      if (!(DECLARED[other] ?? []).includes(task)) {
+        found.push([task, other]);
+      }
+    }
+  }
+
+  return found;
+}
 
 export interface Blocker {
   readonly task: string;
@@ -487,7 +564,36 @@ async function run(db: DB, jobId: string, task: JobTask, context: JobContext): P
   }
 
   if (task === "backup") {
-    return backup(db).path;
+    const written = backup(db);
+
+    // Housekeeping rides on the backup rather than getting a schedule of its
+    // own, because the instant after a backup succeeds is exactly the moment
+    // discarding an older one is safe. Neither prune nor rotate may fail the
+    // job: the backup is already durable, and losing it over a failed unlink
+    // would be a straight downgrade.
+    let note = written.path;
+
+    try {
+      const pruned = pruneBackups();
+
+      if (pruned.removed > 0) {
+        note += `; pruned ${String(pruned.removed)}, freed ${(pruned.bytesFreed / 1_048_576).toFixed(0)} MB`;
+      }
+    } catch {
+      note += "; prune failed";
+    }
+
+    try {
+      const rotated = rotateLogs();
+
+      if (rotated.rotated.length > 0) {
+        note += `; rotated ${String(rotated.rotated.length)} log(s)`;
+      }
+    } catch {
+      note += "; log rotation failed";
+    }
+
+    return note;
   }
 
   if (task === "reindex") {

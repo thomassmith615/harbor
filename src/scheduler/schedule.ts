@@ -234,6 +234,54 @@ export function recordRun(
   ).run(now, status, note.slice(0, 300), computeNextRun(schedule, tz, now), schedule.id);
 }
 
+/** How soon to try again after being refused by a running job. */
+const RETRY_MS = 5 * 60_000;
+
+/**
+ * How long to keep retrying before forfeiting the slot.
+ *
+ * Long enough to outlast any ingest pass that is merely slow, short enough that
+ * a genuinely stuck job does not leave a task retrying until the small hours.
+ */
+const RETRY_WINDOW_MS = 3 * 3_600_000;
+
+/**
+ * A schedule that was refused because something else held the lock.
+ *
+ * Not the same as a run, and the difference cost real work. `recordRun`
+ * advances `next_run_at` by `computeNextRun`, which for a daily task means
+ * tomorrow. So a refusal forfeited the entire day:
+ *
+ *   commit   last Sat 11:08 AM  ok  skipped: pulse is running
+ *   derive   last Sat 11:08 AM  ok  skipped: pulse is running
+ *   extract  last Sat 11:08 AM  ok  skipped: pulse is running
+ *   notice   last Sat 11:08 AM  ok  skipped: pulse is running
+ *
+ * Four passes collided with one pulse, and none of them ran that cycle. It was
+ * recorded as status `ok`, which is how it stayed invisible: the schedule list
+ * showed four healthy tasks that had quietly done nothing.
+ *
+ * So a refusal retries shortly instead, bounded by a window measured from when
+ * the task was originally due. `last_run_at` is deliberately not touched: it
+ * did not run, and every staleness check downstream depends on that being
+ * honest.
+ */
+export function recordRefusal(db: DB, schedule: Schedule, tz: string, note: string): void {
+  const now = Date.now();
+  const dueAt = schedule.nextRunAt ?? now;
+  const retryAt = now + RETRY_MS;
+
+  // Past the window, give up on this slot and wait for the natural next one.
+  // Without this a permanently stuck job leaves the task retrying every five
+  // minutes indefinitely, which is a busy loop wearing a schedule as a hat.
+  const nextRunAt =
+    retryAt - dueAt > RETRY_WINDOW_MS ? computeNextRun(schedule, tz, now) : retryAt;
+
+  db.prepare(
+    `UPDATE schedules SET last_status = 'skipped', last_note = ?, next_run_at = ? WHERE id = ?`,
+  ).run(note.slice(0, 300), nextRunAt, schedule.id);
+}
+
 /**
  * Whether a scheduled task should be skipped right now.
  *

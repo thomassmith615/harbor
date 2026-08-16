@@ -22,6 +22,7 @@ import { readSecret } from "../kernel/keychain.js";
 import type { KeySource } from "../kernel/encryption.js";
 import { join } from "node:path";
 import { harborHome } from "../kernel/paths.js";
+import { directoryBytes, freeBytes } from "../kernel/housekeeping.js";
 import { detectKeychain, isReference } from "../kernel/keychain.js";
 import type { DB } from "../kernel/db.js";
 
@@ -272,7 +273,7 @@ function checkStore(db: DB, keySource: KeySource): readonly Finding[] {
   return findings;
 }
 
-function checkSchedule(db: DB): readonly Finding[] {
+function checkSchedule(db: DB, now: number): readonly Finding[] {
   const count = (db.prepare(`SELECT COUNT(*) AS n FROM schedules WHERE enabled = 1`).get() as {
     n: number;
   }).n;
@@ -288,7 +289,133 @@ function checkSchedule(db: DB): readonly Finding[] {
     ];
   }
 
-  return [{ area: "schedule", severity: "ok", detail: `${String(count)} tasks enabled`, fix: null }];
+  const findings: Finding[] = [
+    { area: "schedule", severity: "ok", detail: `${String(count)} tasks enabled`, fix: null },
+  ];
+
+  // A schedule that is enabled and has never succeeded is the failure mode this
+  // whole check exists for. It looks identical to a healthy one in
+  // `settings schedule list`: enabled, next run set, and quietly failing or
+  // being refused every time it comes due.
+  const rows = db
+    .prepare(
+      `SELECT task, last_run_at, last_status, last_note, interval_minutes, next_run_at
+       FROM schedules WHERE enabled = 1`,
+    )
+    .all() as {
+    task: string;
+    last_run_at: number | null;
+    last_status: string | null;
+    last_note: string | null;
+    interval_minutes: number | null;
+    next_run_at: number | null;
+  }[];
+
+  for (const row of rows) {
+    // Twice its own interval for a repeating task, two days for a daily one.
+    // Anything that has missed two consecutive windows is not late, it is
+    // broken, and on an appliance nobody finds out any other way.
+    const budget =
+      row.interval_minutes === null ? 2 * 86_400_000 : row.interval_minutes * 60_000 * 2;
+
+    if (row.last_run_at === null) {
+      // A schedule that has never run is only interesting once it is overdue.
+      // The first version of this warned unconditionally, which meant a fresh
+      // `harbor init` printed eight warnings about tasks that were working
+      // perfectly and simply had not come due yet. A diagnostic that cries on
+      // a healthy new install teaches people to skim past it, and then it is
+      // worth nothing on the day something is actually wrong.
+      if (row.next_run_at !== null && now - row.next_run_at > budget) {
+        findings.push({
+          area: `schedule ${row.task}`,
+          severity: "problem",
+          detail: "was due and has still never run",
+          fix: "harbor daemon, or check it is loaded with launchctl list | grep harbor",
+        });
+      }
+
+      continue;
+    }
+
+    const age = now - row.last_run_at;
+
+    if (age > budget) {
+      findings.push({
+        area: `schedule ${row.task}`,
+        severity: "problem",
+        detail:
+          `last ran ${String(Math.round(age / 3_600_000))}h ago, which is past two of its own windows`,
+        fix: "harbor jobs, and check the daemon is running",
+      });
+
+      continue;
+    }
+
+    if (row.last_status === "error") {
+      findings.push({
+        area: `schedule ${row.task}`,
+        severity: "problem",
+        detail: `last run failed: ${(row.last_note ?? "no detail").slice(0, 80)}`,
+        fix: `harbor dev run ${row.task}`,
+      });
+
+      continue;
+    }
+
+    // Being refused once is routine coordination. Being refused every time is a
+    // task that never runs, and the only difference visible from outside is
+    // that one of them says "skipped" twice in a row.
+    if (row.last_status === "skipped" && (row.last_note ?? "").startsWith("skipped:")) {
+      findings.push({
+        area: `schedule ${row.task}`,
+        severity: "warn",
+        detail: `last attempt was refused: ${(row.last_note ?? "").slice(0, 60)}`,
+        fix: "harbor jobs, to see what is holding the lock",
+      });
+    }
+  }
+
+  return findings;
+}
+
+/**
+ * Whether the appliance is going to run out of room.
+ *
+ * Two writers used to grow without limit: nightly backups, which nothing
+ * pruned, and the daemon logs, which nothing rotated. Both are bounded now,
+ * but the check stays, because the first symptom of a full disk is Harbor
+ * failing to write, which is also the moment it stops being able to back
+ * itself up. That is not a thing to discover from a stack trace.
+ */
+function checkDisk(): readonly Finding[] {
+  const findings: Finding[] = [];
+  const free = freeBytes();
+
+  const storePath = join(harborHome(), "harbor.db");
+  const storeBytes = existsSync(storePath) ? statSync(storePath).size : 0;
+  const backupBytes = directoryBytes("backups");
+  const logBytes = directoryBytes("logs");
+
+  if (free !== null) {
+    // Enough room for the store plus one more backup of it, with headroom. A
+    // disk that cannot hold one more snapshot has already stopped being backed
+    // up, whatever the schedule says.
+    const needed = storeBytes * 2;
+
+    findings.push({
+      area: "disk",
+      severity: free < needed ? "problem" : free < needed * 2 ? "warn" : "ok",
+      detail:
+        `${bytes(free)} free, store is ${bytes(storeBytes)}, ` +
+        `backups ${bytes(backupBytes)}, logs ${bytes(logBytes)}`,
+      fix:
+        free < needed * 2
+          ? "harbor backup --prune, or move ~/.harbor/backups to another volume"
+          : null,
+    });
+  }
+
+  return findings;
 }
 
 export interface DoctorReport {
@@ -309,7 +436,8 @@ export async function doctor(db: DB, now: number = Date.now()): Promise<DoctorRe
     ...checkSources(db, now),
     ...checkStore(db, keySource),
     ...checkBackups(),
-    ...checkSchedule(db),
+    ...checkDisk(),
+    ...checkSchedule(db, now),
   ];
 
   return {

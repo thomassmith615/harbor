@@ -20,7 +20,7 @@
  * thread in a text conversation is a far more common kind of forgotten thing
  * than an unanswered email, and until now Harbor could not see any of them.
  */
-import { copyFileSync, existsSync, mkdtempSync, rmSync } from "node:fs";
+import { copyFileSync, existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 // The same driver the store uses, deliberately.
@@ -45,6 +45,44 @@ export function chatDbPath(): string {
 
 export function available(): boolean {
   return existsSync(chatDbPath());
+}
+
+/**
+ * A cheap fingerprint of the live database, without opening it.
+ *
+ * The snapshot below copies `chat.db` plus its `-wal` and `-shm` sidecars in
+ * full, every single time a sync runs. That was fine when a sync was something
+ * a person typed. On the appliance it is a fifteen-minute pulse, so it is
+ * roughly a hundred full copies a day of a multi-gigabyte file that usually has
+ * not changed at all: hours of pointless I/O, and write amplification on the
+ * SSD it is copying onto.
+ *
+ * mtime and size across all three files is enough. A message written and
+ * another deleted in the same second leaving the byte count identical is the
+ * theoretical miss, and the next pulse catches it, because the WAL will not
+ * come back to exactly the same size twice.
+ */
+export function liveFingerprint(): string | null {
+  const source = chatDbPath();
+
+  if (!existsSync(source)) {
+    return null;
+  }
+
+  const parts: string[] = [];
+
+  for (const suffix of ["", "-wal", "-shm"]) {
+    const path = `${source}${suffix}`;
+
+    try {
+      const stat = statSync(path);
+      parts.push(`${suffix}:${String(stat.size)}:${String(Math.floor(stat.mtimeMs))}`);
+    } catch {
+      parts.push(`${suffix}:absent`);
+    }
+  }
+
+  return parts.join("|");
 }
 
 interface Snapshot {
@@ -238,13 +276,68 @@ function toItem(context: SyncContext, row: MessageRow): ItemUpsert | null {
 
 const PAGE = 2_000;
 
+/**
+ * The cursor, which is a row id and the fingerprint of the file it was read
+ * from.
+ *
+ * Legacy cursors are a bare row id and parse to a null fingerprint, which
+ * simply means the first run after upgrading does not skip. Nothing has to be
+ * reset. The framework treats this as opaque, which is exactly what the
+ * connector contract promises, so the format is ours to extend.
+ */
+function parseCursor(cursor: string | null): {
+  readonly rowid: number;
+  readonly fingerprint: string | null;
+} {
+  if (cursor === null) {
+    return { rowid: 0, fingerprint: null };
+  }
+
+  const hash = cursor.indexOf("#");
+
+  if (hash < 0) {
+    return { rowid: Number.parseInt(cursor, 10) || 0, fingerprint: null };
+  }
+
+  return {
+    rowid: Number.parseInt(cursor.slice(0, hash), 10) || 0,
+    fingerprint: cursor.slice(hash + 1),
+  };
+}
+
 async function* walk(context: SyncContext, cursor: string | null): AsyncGenerator<SyncBatch> {
+  const resume = parseCursor(cursor);
+
+  // Read the fingerprint before the copy, never after. If chat.db changes while
+  // we are reading it, recording the older fingerprint means the next pulse
+  // reads again, and reading twice is the cheap mistake.
+  const fingerprint = liveFingerprint();
+
+  // Nothing has been written to chat.db since the last pass, so there is
+  // nothing to copy and nothing to read.
+  //
+  // Provably equivalent to running: with a non-null cursor this walk ignores
+  // the window entirely and resumes from a row id, and row ids are monotonic,
+  // so an unchanged file cannot contain a row above the one we stopped at.
+  // What it saves is the copy, which is the whole file plus its WAL, taken
+  // ninety-six times a day on a fifteen-minute pulse.
+  if (
+    cursor !== null &&
+    resume.fingerprint !== null &&
+    fingerprint !== null &&
+    resume.fingerprint === fingerprint
+  ) {
+    return;
+  }
+
   const snap = snapshot();
+  const stamp = (at: number): string =>
+    fingerprint === null ? String(at) : `${String(at)}#${fingerprint}`;
 
   try {
     const total = snap.db.prepare(`SELECT COUNT(*) AS n FROM message`).get() as { n: number };
 
-    let rowid = cursor === null ? 0 : (Number.parseInt(cursor, 10) || 0);
+    let rowid = resume.rowid;
 
     const requestedFloor = context.window?.since ?? null;
     const ceiling = context.window?.until ?? null;
@@ -281,6 +374,12 @@ async function* walk(context: SyncContext, cursor: string | null): AsyncGenerato
       const rows = snap.db.prepare(QUERY).all({ cursor: rowid, limit: PAGE }) as MessageRow[];
 
       if (rows.length === 0) {
+        // An empty batch, purely to record the fingerprint. Without this the
+        // cursor only ever gains one on a page that had rows, so a store that
+        // is already caught up never learns it can skip and copies the file
+        // forever.
+        yield { upserts: [], cursor: stamp(rowid), progress: { total: total.n } };
+
         return;
       }
 
@@ -316,8 +415,10 @@ async function* walk(context: SyncContext, cursor: string | null): AsyncGenerato
       yield {
         upserts,
         // The cursor is a row id, which is monotonic and never reused. Simpler
-        // and more reliable than anything the networked sources offer.
-        cursor: String(rowid),
+        // and more reliable than anything the networked sources offer. The
+        // fingerprint rides along so the next pass can tell whether the file
+        // moved at all.
+        cursor: stamp(rowid),
         progress: { total: total.n },
         ...(unreadable > 0
           ? {

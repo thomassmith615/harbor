@@ -285,7 +285,19 @@ export interface Thread {
   readonly sourceCount: number;
   readonly salience: number;
   readonly updatedAt: number;
+  /** Harbor's opinion, or the person's decision. Passes never write this. */
+  readonly state: SituationState;
+  readonly titleSource: TitleSource;
+  readonly stateChangedAt: number | null;
+  /** When Harbor first saw this situation, across every rebuild since. */
+  readonly firstSeenAt: number | null;
+  /** When its membership last actually changed, as opposed to was rewritten. */
+  readonly lastChangedAt: number | null;
+  readonly nodeDigest: string | null;
 }
+
+export type SituationState = "open" | "resolved" | "dismissed";
+export type TitleSource = "derived" | "user";
 
 interface ThreadRow {
   readonly id: string;
@@ -299,6 +311,12 @@ interface ThreadRow {
   readonly source_count: number;
   readonly salience: number;
   readonly updated_at: number;
+  readonly state: SituationState;
+  readonly title_source: TitleSource;
+  readonly state_changed_at: number | null;
+  readonly first_seen_at: number | null;
+  readonly last_changed_at: number | null;
+  readonly node_digest: string | null;
 }
 
 function hydrateThread(row: ThreadRow): Thread {
@@ -314,71 +332,155 @@ function hydrateThread(row: ThreadRow): Thread {
     sourceCount: row.source_count,
     salience: row.salience,
     updatedAt: row.updated_at,
+    state: row.state,
+    titleSource: row.title_source,
+    stateChangedAt: row.state_changed_at,
+    firstSeenAt: row.first_seen_at,
+    lastChangedAt: row.last_changed_at,
+    nodeDigest: row.node_digest,
   };
 }
 
 export interface ThreadInput {
+  /** Minted by the caller. Never derived from the contents; see situations.ts. */
+  readonly id: string;
   readonly principalId: string;
   readonly title: string | null;
+  readonly titleSource: TitleSource;
   readonly kind: string;
   readonly nodes: readonly NodeRef[];
   readonly startsAt: number | null;
   readonly endsAt: number | null;
   readonly sourceCount: number;
   readonly salience: number;
+  readonly nodeDigest: string;
+  readonly firstSeenAt: number;
+  readonly lastChangedAt: number;
+  readonly state: SituationState;
+  readonly stateChangedAt: number | null;
+  readonly updatedAt: number;
 }
 
 /**
- * A situation's id is a function of what is in it.
+ * A situation as it stands before this pass, with everything the matcher needs.
  *
- * Situations are rebuilt from scratch on every relate, and with a random id
- * that meant the same situation came back as a different row every few minutes.
- * Anything holding one (a dismissal, a saved link, an observation's evidence)
- * pointed at a row that no longer existed, and the only symptom was things
- * quietly reappearing after being dismissed.
- *
- * Hashing the membership means a rebuild that finds the same situation gives it
- * the same id, and one that genuinely grew gets a new one, which is correct: it
- * is not the same claim any more.
+ * Loaded in two queries rather than one per situation: the matcher runs at the
+ * end of every relate, which on the appliance is every fifteen minutes.
  */
-function threadId(nodes: readonly NodeRef[]): string {
-  const digest = createHash("sha256").update(nodes.map(nodeKey).sort().join("|")).digest("hex");
-
-  return `th_${digest.slice(0, 16)}`;
+export interface ExistingSituation {
+  readonly id: string;
+  readonly title: string | null;
+  readonly titleSource: TitleSource;
+  readonly state: SituationState;
+  readonly stateChangedAt: number | null;
+  readonly firstSeenAt: number | null;
+  readonly lastChangedAt: number | null;
+  readonly nodeDigest: string | null;
+  readonly nodeKeys: ReadonlySet<string>;
 }
 
-export function saveThread(db: DB, input: ThreadInput): Thread {
-  const id = threadId(input.nodes);
-  const now = Date.now();
+export function existingSituations(db: DB, principalId: string): readonly ExistingSituation[] {
+  const rows = db
+    .prepare(
+      `SELECT id, title, title_source, state, state_changed_at, first_seen_at,
+              last_changed_at, node_digest
+       FROM threads WHERE principal_id = ?`,
+    )
+    .all(principalId) as {
+    id: string;
+    title: string | null;
+    title_source: TitleSource;
+    state: SituationState;
+    state_changed_at: number | null;
+    first_seen_at: number | null;
+    last_changed_at: number | null;
+    node_digest: string | null;
+  }[];
 
+  if (rows.length === 0) {
+    return [];
+  }
+
+  const keysById = new Map<string, Set<string>>();
+
+  const members = db
+    .prepare(
+      `SELECT tn.thread_id AS thread_id, tn.node_kind AS kind, tn.node_id AS id
+       FROM thread_nodes tn
+       JOIN threads t ON t.id = tn.thread_id
+       WHERE t.principal_id = ?`,
+    )
+    .all(principalId) as { thread_id: string; kind: string; id: string }[];
+
+  for (const member of members) {
+    const set = keysById.get(member.thread_id) ?? new Set<string>();
+    set.add(`${member.kind}:${member.id}`);
+    keysById.set(member.thread_id, set);
+  }
+
+  return rows.map((row) => ({
+    id: row.id,
+    title: row.title,
+    titleSource: row.title_source,
+    state: row.state,
+    stateChangedAt: row.state_changed_at,
+    firstSeenAt: row.first_seen_at,
+    lastChangedAt: row.last_changed_at,
+    nodeDigest: row.node_digest,
+    nodeKeys: keysById.get(row.id) ?? new Set<string>(),
+  }));
+}
+
+/**
+ * Writes a situation under an id the caller chose.
+ *
+ * Membership is replaced rather than merged: a node that left the component has
+ * to leave the situation, or a situation only ever grows and eventually
+ * describes everything.
+ */
+export function saveThread(db: DB, input: ThreadInput): Thread {
   const write = db.transaction(() => {
     db.prepare(
       `INSERT INTO threads
-         (id, principal_id, title, kind, starts_at, ends_at, item_count, source_count,
-          salience, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         (id, principal_id, title, title_source, kind, starts_at, ends_at, item_count,
+          source_count, salience, state, state_changed_at, first_seen_at, last_changed_at,
+          node_digest, created_at, updated_at)
+       VALUES (@id, @principalId, @title, @titleSource, @kind, @startsAt, @endsAt, @itemCount,
+               @sourceCount, @salience, @state, @stateChangedAt, @firstSeenAt, @lastChangedAt,
+               @nodeDigest, @firstSeenAt, @updatedAt)
        ON CONFLICT (id) DO UPDATE SET
          title = excluded.title,
+         title_source = excluded.title_source,
          kind = excluded.kind,
          starts_at = excluded.starts_at,
          ends_at = excluded.ends_at,
          item_count = excluded.item_count,
          source_count = excluded.source_count,
          salience = excluded.salience,
+         first_seen_at = excluded.first_seen_at,
+         last_changed_at = excluded.last_changed_at,
+         node_digest = excluded.node_digest,
          updated_at = excluded.updated_at`,
-    ).run(
-      id,
-      input.principalId,
-      input.title,
-      input.kind,
-      input.startsAt,
-      input.endsAt,
-      input.nodes.length,
-      input.sourceCount,
-      input.salience,
-      now,
-      now,
-    );
+    ).run({
+      id: input.id,
+      principalId: input.principalId,
+      title: input.title,
+      titleSource: input.titleSource,
+      kind: input.kind,
+      startsAt: input.startsAt,
+      endsAt: input.endsAt,
+      itemCount: input.nodes.length,
+      sourceCount: input.sourceCount,
+      salience: input.salience,
+      state: input.state,
+      stateChangedAt: input.stateChangedAt,
+      firstSeenAt: input.firstSeenAt,
+      lastChangedAt: input.lastChangedAt,
+      nodeDigest: input.nodeDigest,
+      updatedAt: input.updatedAt,
+    });
+
+    db.prepare(`DELETE FROM thread_nodes WHERE thread_id = ?`).run(input.id);
 
     const attach = db.prepare(
       `INSERT INTO thread_nodes (thread_id, node_kind, node_id) VALUES (?, ?, ?)
@@ -386,19 +488,57 @@ export function saveThread(db: DB, input: ThreadInput): Thread {
     );
 
     for (const ref of input.nodes) {
-      attach.run(id, ref.kind, ref.id);
+      attach.run(input.id, ref.kind, ref.id);
     }
   });
 
   write();
 
-  const thread = getThread(db, id);
+  const thread = getThread(db, input.id);
 
   if (thread === null) {
-    throw new Error(`Situation ${id} vanished immediately after being written`);
+    throw new Error(`Situation ${input.id} vanished immediately after being written`);
   }
 
   return thread;
+}
+
+export function deleteThread(db: DB, id: string): void {
+  const work = db.transaction(() => {
+    db.prepare(`DELETE FROM thread_nodes WHERE thread_id = ?`).run(id);
+    db.prepare(`DELETE FROM threads WHERE id = ?`).run(id);
+  });
+
+  work();
+}
+
+/**
+ * The person's decision about a situation.
+ *
+ * Separate from every write a pass makes, and that separation is the feature.
+ * A derivation may change what is in a situation and what it is called; it may
+ * not decide that something you dismissed is interesting again.
+ */
+export function setThreadState(
+  db: DB,
+  id: string,
+  state: SituationState,
+  now: number = Date.now(),
+): boolean {
+  const changed = db
+    .prepare(`UPDATE threads SET state = ?, state_changed_at = ? WHERE id = ?`)
+    .run(state, state === "open" ? null : now, id).changes;
+
+  return changed > 0;
+}
+
+/** A title the person wrote. Marked as theirs so no later pass overwrites it. */
+export function renameThread(db: DB, id: string, title: string): boolean {
+  const changed = db
+    .prepare(`UPDATE threads SET title = ?, title_source = 'user', updated_at = ? WHERE id = ?`)
+    .run(title, Date.now(), id).changes;
+
+  return changed > 0;
 }
 
 export function getThread(db: DB, id: string): Thread | null {
@@ -465,23 +605,47 @@ export function threadsFor(db: DB, ref: NodeRef): readonly Thread[] {
 export function topThreads(
   db: DB,
   principalId: string,
-  options: { readonly limit?: number; readonly since?: number; readonly minSources?: number } = {},
+  options: {
+    readonly limit?: number;
+    readonly since?: number;
+    readonly minSources?: number;
+    /**
+     * Which states to include. Defaults to open only.
+     *
+     * Every caller that reasons or speaks (detectors, the digest, the ask
+     * tools) wants the default. A person who resolved something has said it is
+     * over, and continuing to reason about it is precisely the behaviour that
+     * makes an assistant feel like it is not listening.
+     */
+    readonly states?: readonly SituationState[];
+    /** Only situations whose membership changed since this instant. */
+    readonly changedSince?: number;
+  } = {},
 ): readonly Thread[] {
+  const states = options.states ?? (["open"] as const);
+  const placeholders = states.map(() => "?").join(", ");
+
   const rows = db
     .prepare(
       `SELECT * FROM threads
-       WHERE principal_id = @principal
-         AND (@since IS NULL OR ends_at >= @since)
-         AND source_count >= @minSources
+       WHERE principal_id = ?
+         AND (? IS NULL OR ends_at >= ?)
+         AND source_count >= ?
+         AND (? IS NULL OR last_changed_at >= ?)
+         AND state IN (${placeholders})
        ORDER BY salience DESC, ends_at DESC
-       LIMIT @limit`,
+       LIMIT ?`,
     )
-    .all({
-      principal: principalId,
-      since: options.since ?? null,
-      minSources: options.minSources ?? 1,
-      limit: options.limit ?? 20,
-    }) as ThreadRow[];
+    .all(
+      principalId,
+      options.since ?? null,
+      options.since ?? null,
+      options.minSources ?? 1,
+      options.changedSince ?? null,
+      options.changedSince ?? null,
+      ...states,
+      options.limit ?? 20,
+    ) as ThreadRow[];
 
   return rows.map(hydrateThread);
 }
@@ -489,9 +653,13 @@ export function topThreads(
 /**
  * Clears every situation, leaving the edges.
  *
- * Situations are a grouping over edges, so rebuilding them is cheap and
- * rebuilding the edges is not. Keeping the two rebuildable independently means
- * the clustering can change without re-reading a quarter of a million items.
+ * No longer part of a normal pass. Situations now carry identity across
+ * rebuilds (see src/derive/situations.ts), and truncating the table is exactly
+ * what that change exists to stop: it discards every rename, every dismissal,
+ * and every first-seen date in the store.
+ *
+ * Kept for one legitimate caller, `harbor dev relate --rebuild-situations`,
+ * where discarding all of that is the explicit request.
  */
 export function clearThreads(db: DB): number {
   const work = db.transaction(() => {

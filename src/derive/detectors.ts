@@ -392,6 +392,10 @@ function detectUpcomingLooseEnds(db: DB, context: DetectorContext): DetectorResu
        JOIN items i ON i.id = tn.node_id AND tn.node_kind = 'item'
        WHERE t.principal_id = @principal
          AND t.source_count >= 2
+         -- A situation the person resolved or dismissed is closed, and a
+         -- detector that keeps reading it is how a dismissal turns into a
+         -- suggestion that comes back under a different wording.
+         AND t.state = 'open'
          AND i.kind = 'event'
          AND i.occurred_at BETWEEN @now AND @soon
          AND i.deleted_at IS NULL

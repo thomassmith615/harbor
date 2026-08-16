@@ -13,10 +13,11 @@
  * weekend is a situation, and no single application can see it. So salience is
  * driven by how many sources contributed, not by how many nodes there are.
  */
-import { clearThreads, saveThread } from "../store/relationships.js";
+import { reconcileSituations } from "./situations.js";
 import { isHandleTitle, nameHandles } from "../store/entities.js";
 import type { DB } from "../kernel/db.js";
 import type { NodeRef } from "../store/nodes.js";
+import type { SituationProposal } from "./situations.js";
 import type { NoiseIndex } from "./noise.js";
 
 /** Below this, an edge is a hint rather than a reason to group things. */
@@ -60,6 +61,15 @@ export interface ThreadReport {
   readonly components: number;
   readonly threads: number;
   readonly crossSource: number;
+  /** Situations that kept the id they had before this pass. */
+  readonly carried: number;
+  /** Of those, how many actually changed membership. */
+  readonly changed: number;
+  readonly created: number;
+  readonly merged: number;
+  readonly retired: number;
+  /** Unclaimed, but kept because the person had renamed or closed them. */
+  readonly keptForState: number;
 }
 
 function keyOf(kind: string, id: string): string {
@@ -129,9 +139,16 @@ function loadFacts(db: DB, noise?: NoiseIndex): Map<string, NodeFacts> {
   return facts;
 }
 
+/**
+ * Components in, durable situations out.
+ *
+ * This function decides what a situation *is*, exactly as before. What it no
+ * longer decides is which situation it is: proposals go to the matcher in
+ * situations.ts, which carries ids forward. Everything below the return of the
+ * proposal list is unchanged from M9 through M20, deliberately, because it is
+ * the part that has been shaken out against real data.
+ */
 export function buildThreads(db: DB, principalId: string, noise?: NoiseIndex): ThreadReport {
-  clearThreads(db);
-
   const edges = db
     .prepare(
       `SELECT from_kind, from_id, to_kind, to_id FROM relationships WHERE confidence >= ?`,
@@ -139,7 +156,19 @@ export function buildThreads(db: DB, principalId: string, noise?: NoiseIndex): T
     .all(MIN_CONFIDENCE) as EdgeRow[];
 
   if (edges.length === 0) {
-    return { components: 0, threads: 0, crossSource: 0 };
+    const empty = reconcileSituations(db, principalId, []);
+
+    return {
+      components: 0,
+      threads: 0,
+      crossSource: 0,
+      carried: empty.carried,
+      changed: empty.changed,
+      created: empty.created,
+      merged: empty.merged,
+      retired: empty.retired,
+      keptForState: empty.keptForState,
+    };
   }
 
   // Union-find. The components are needed, not the paths, and this is linear
@@ -198,7 +227,7 @@ export function buildThreads(db: DB, principalId: string, noise?: NoiseIndex): T
 
   const facts = loadFacts(db, noise);
 
-  let threads = 0;
+  const proposals: SituationProposal[] = [];
   let crossSource = 0;
 
   for (const [, members] of components) {
@@ -260,7 +289,7 @@ export function buildThreads(db: DB, principalId: string, noise?: NoiseIndex): T
       continue;
     }
 
-    saveThread(db, {
+    proposals.push({
       principalId,
       title: titleFor(db, nodes),
       kind: [...kinds].sort().join("+"),
@@ -270,11 +299,21 @@ export function buildThreads(db: DB, principalId: string, noise?: NoiseIndex): T
       sourceCount: sources.size,
       salience: salienceOf(nodes.length, sources.size, kinds.size, last.occurredAt),
     });
-
-    threads += 1;
   }
 
-  return { components: components.size, threads, crossSource };
+  const report = reconcileSituations(db, principalId, proposals);
+
+  return {
+    components: components.size,
+    threads: proposals.length,
+    crossSource,
+    carried: report.carried,
+    changed: report.changed,
+    created: report.created,
+    merged: report.merged,
+    retired: report.retired,
+    keptForState: report.keptForState,
+  };
 }
 
 /**
