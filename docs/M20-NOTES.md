@@ -166,3 +166,56 @@ must stay prose.
 And the template-literal trap caught me a third time: Python turned `\u2022` in
 my patch into a literal bullet, so the insertion silently did nothing and the
 build stayed green. The test failing is the only reason I noticed.
+
+## 0.41.3
+
+"Who have I texted today" answered with a table of phone numbers.
+
+I fixed this in M13 and fixed the wrong thing. Handle resolution was written for
+situation titles and stayed private to that file, so `harbor situations` printed
+"Isabella Forté" while the layer a person actually reads printed
+`+13392047146`. Harbor had 1,403 resolved people and 2,763 identifiers and the
+code that knew the answer was never called.
+
+Moved into the entity store, where any layer can reach it, and applied to the
+three places a name reaches a model:
+
+- **`with`**, the participant list on a conversation, which was the raw handles
+  and is what the answer was built from.
+- **Speaker labels in a transcript**, so "who said what" is a name.
+- **Situation and `related` titles**, resolved once in the function that renders
+  a node rather than by each caller remembering to ask.
+
+Transcripts are resolved at read time rather than rewritten at derive time,
+deliberately. A name is derived data and resolution improves; a transcript
+rewritten at ingest would be frozen with whatever Harbor knew that day, and a
+later merge or rename would never reach it.
+
+Two things it will not do. An unknown number stays a number, because a handle
+with nobody behind it is still information and inventing a name would be worse
+than showing digits. And only a label at the start of a line is a speaker, so
+"call me on +1555..." inside a message stays as written.
+
+Seven tests, covering both directions.
+
+## 0.41.4
+
+"Who have I texted recently" still answered with a column of phone numbers, and
+0.41.3 would not have fixed it either.
+
+An entity created from a message is named after the handle it came from, because
+that is all a message carries. The real name arrives later from a contact card
+and lands as a `name` identifier on the same entity, not as its display name. So
+`display_name` is a phone number for most of the people somebody texts, and
+every surface reading that column got digits.
+
+`nameForHandle` gave up when the display name looked like a handle, which is
+precisely the entity that most needs naming, with the contact card one join
+away. It now falls through to the entity's best `name` identifier, and
+`recentCorrespondents` resolves through the same path rather than reading the
+column directly.
+
+Worth stating as a rule, since this is the third surface to get it wrong:
+**`entities.display_name` is not the name to show.** It is whatever named the
+entity first. Anything a person reads should go through the resolution, and
+anything that reads the column is a bug waiting for somebody to notice.

@@ -11,6 +11,7 @@
  * that referred to it.
  */
 import { createHash } from "node:crypto";
+import { isHandle, nameForHandle } from "./entities.js";
 import type { DB } from "../kernel/db.js";
 
 export interface Episode {
@@ -306,7 +307,14 @@ export function recentCorrespondents(
       limit: options.limit ?? 20,
     }) as Correspondent[];
 
-  return rows;
+  // Names resolved the same way every other surface does it. `display_name` is
+  // a handle whenever an entity was created from a message before anything
+  // named it, which is most of them, so reading the column alone produced a
+  // list of phone numbers.
+  return rows.map((row) => ({
+    ...row,
+    name: isHandle(row.name) ? (nameForHandle(db, row.name) ?? row.name) : row.name,
+  }));
 }
 
 export function countEpisodes(db: DB): number {

@@ -14,6 +14,7 @@
  * driven by how many sources contributed, not by how many nodes there are.
  */
 import { clearThreads, saveThread } from "../store/relationships.js";
+import { isHandleTitle, nameHandles } from "../store/entities.js";
 import type { DB } from "../kernel/db.js";
 import type { NodeRef } from "../store/nodes.js";
 import type { NoiseIndex } from "./noise.js";
@@ -126,69 +127,6 @@ function loadFacts(db: DB, noise?: NoiseIndex): Map<string, NodeFacts> {
   }
 
   return facts;
-}
-
-/**
- * Turns handles in a title into the names Harbor already knows.
- *
- * A conversation's title is whatever the source called it, which for iMessage
- * is a phone number or a list of them. Four of the situations on a real run
- * were named things like `+13392047146`, and Harbor had 2,750 identifiers and
- * 1,403 resolved people at the time: it knew perfectly well that was Isabella
- * and printed the digits anyway.
- *
- * Only display. Nothing here is stored, and the underlying handles are
- * untouched, so a rename in Contacts shows up on the next pass without any
- * migration.
- */
-/** A phone number or short-code, with or without punctuation. */
-export function isHandle(value: string): boolean {
-  return /^\+?\d[\d\s()-]{6,}$/.test(value.trim());
-}
-
-/**
- * A title that is nothing but handles.
- *
- * Group conversations are titled with a comma-separated list, and testing the
- * whole string against a phone-number pattern never matched one, so a group
- * chat beat a real subject line whenever both were in the same situation.
- */
-export function isHandleTitle(title: string): boolean {
-  const parts = title.split(",").map((part) => part.trim()).filter((part) => part.length > 0);
-
-  return parts.length > 0 && parts.every(isHandle);
-}
-
-function nameHandles(db: DB, title: string): string {
-  const lookup = db.prepare(
-    `SELECT e.display_name AS name FROM identifiers i
-     JOIN entities e ON e.id = i.entity_id
-     WHERE i.normalized = ? AND e.merged_into IS NULL
-     LIMIT 1`,
-  );
-
-  const named = title.split(",").map((part) => {
-    const handle = part.trim();
-
-    if (!isHandle(handle)) {
-      return handle;
-    }
-
-    const row = lookup.get(handle.replace(/[^\d+]/g, "")) as { name: string } | undefined;
-
-    if (row === undefined || row.name.includes("@") || /^\+?\d/.test(row.name)) {
-      return handle;
-    }
-
-    return row.name;
-  });
-
-  // Three names and a count reads; eight names and a count does not.
-  if (named.length > 3) {
-    return `${named.slice(0, 3).join(", ")} and ${String(named.length - 3)} others`;
-  }
-
-  return named.join(", ");
 }
 
 export function buildThreads(db: DB, principalId: string, noise?: NoiseIndex): ThreadReport {

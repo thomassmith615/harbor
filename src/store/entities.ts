@@ -613,3 +613,155 @@ export function listSelfHandles(db: DB): readonly SelfHandleRow[] {
     .prepare(`SELECT kind, value, source FROM self_handles ORDER BY kind, value`)
     .all() as SelfHandleRow[];
 }
+
+// ---- naming ----
+
+/**
+ * Turns handles in a title into the names Harbor already knows.
+ *
+ * Lives here rather than beside the code that first needed it, which is the
+ * whole point of moving it. It was written for situation titles and stayed
+ * private to that file, so `harbor situations` said "Isabella Forté" while the
+ * chat answering "who have I texted today" printed a table of phone numbers.
+ * The resolution existed, knew the answer, and was never called by the layer a
+ * person actually reads.
+ *
+ * A conversation's title is whatever the source called it, which for iMessage
+ * is a phone number or a list of them. Four of the situations on a real run
+ * were named things like `+13392047146`, and Harbor had 2,750 identifiers and
+ * 1,403 resolved people at the time: it knew perfectly well that was Isabella
+ * and printed the digits anyway.
+ *
+ * Only display. Nothing here is stored, and the underlying handles are
+ * untouched, so a rename in Contacts shows up on the next pass without any
+ * migration.
+ */
+/** A phone number or short-code, with or without punctuation. */
+export function isHandle(value: string): boolean {
+  return /^\+?\d[\d\s()-]{6,}$/.test(value.trim());
+}
+
+/**
+ * A title that is nothing but handles.
+ *
+ * Group conversations are titled with a comma-separated list, and testing the
+ * whole string against a phone-number pattern never matched one, so a group
+ * chat beat a real subject line whenever both were in the same situation.
+ */
+export function isHandleTitle(title: string): boolean {
+  const parts = title.split(",").map((part) => part.trim()).filter((part) => part.length > 0);
+
+  return parts.length > 0 && parts.every(isHandle);
+}
+
+export function nameHandles(db: DB, title: string): string {
+  const lookup = db.prepare(
+    `SELECT e.display_name AS name FROM identifiers i
+     JOIN entities e ON e.id = i.entity_id
+     WHERE i.normalized = ? AND e.merged_into IS NULL
+     LIMIT 1`,
+  );
+
+  const named = title.split(",").map((part) => {
+    const handle = part.trim();
+
+    if (!isHandle(handle)) {
+      return handle;
+    }
+
+    const row = lookup.get(handle.replace(/[^\d+]/g, "")) as { name: string } | undefined;
+
+    if (row === undefined || row.name.includes("@") || /^\+?\d/.test(row.name)) {
+      return handle;
+    }
+
+    return row.name;
+  });
+
+  // Three names and a count reads; eight names and a count does not.
+  if (named.length > 3) {
+    return `${named.slice(0, 3).join(", ")} and ${String(named.length - 3)} others`;
+  }
+
+  return named.join(", ");
+}
+
+/**
+ * The name behind one handle, if resolution knows it.
+ *
+ * The single-value form of `nameHandles`, for the places that have a list of
+ * participants rather than a title: a conversation payload, a transcript's
+ * speaker labels. Those are what a model reads when somebody asks who they have
+ * been texting, and until now they were phone numbers all the way down.
+ */
+export function nameForHandle(db: DB, handle: string): string | null {
+  if (!isHandle(handle)) {
+    return null;
+  }
+
+  const normalized = handle.replace(/[^\d+]/g, "");
+
+  const row = db
+    .prepare(
+      `SELECT e.id, e.display_name AS name FROM identifiers i
+       JOIN entities e ON e.id = i.entity_id
+       WHERE i.normalized = ? AND e.merged_into IS NULL
+       LIMIT 1`,
+    )
+    .get(normalized) as { id: string; name: string } | undefined;
+
+  if (row === undefined) {
+    return null;
+  }
+
+  if (!row.name.includes("@") && !isHandle(row.name)) {
+    return row.name;
+  }
+
+  // The display name is itself a handle or an address, which happens whenever
+  // an entity was created from a message before anything named it. The name may
+  // still be on the entity as an identifier, put there by a contact card.
+  //
+  // This is the case the first version missed: it gave up when the display name
+  // was a number, which is exactly the entity that most needs naming, and a
+  // list of correspondents came back as a column of phone numbers while a
+  // contact card sat one join away.
+  const named = db
+    .prepare(
+      `SELECT value FROM identifiers
+       WHERE entity_id = ? AND kind = 'name'
+       ORDER BY confidence DESC, occurrences DESC
+       LIMIT 1`,
+    )
+    .get(row.id) as { value: string } | undefined;
+
+  if (named === undefined || isHandle(named.value) || named.value.includes("@")) {
+    return null;
+  }
+
+  return named.value;
+}
+
+/**
+ * A transcript with its speaker labels resolved.
+ *
+ * The labels are written at derive time, when a message knows only the handle
+ * it came from. Resolving them here rather than there is deliberate: a name is
+ * derived data, resolution improves, and a transcript rewritten at ingest would
+ * be frozen with whatever Harbor knew that day.
+ */
+export function nameTranscript(db: DB, transcript: string): string {
+  const cache = new Map<string, string | null>();
+
+  return transcript.replace(/^(\+?[\d()\s-]{7,}):/gm, (line, handle: string) => {
+    const key = handle.trim();
+
+    if (!cache.has(key)) {
+      cache.set(key, nameForHandle(db, key));
+    }
+
+    const name = cache.get(key) ?? null;
+
+    return name === null ? line : `${name}:`;
+  });
+}

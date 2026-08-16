@@ -34,7 +34,7 @@ import { cleanMerchant, looksLikeRefund, trustSender } from "./merchants.js";
  * purchases stayed filed under hallucinated years, correct in every other
  * respect, and invisible to every report.
  */
-export const PURCHASE_SCHEMA_VERSION = 5;
+export const PURCHASE_SCHEMA_VERSION = 4;
 
 /**
  * Words that make an email look like a receipt.

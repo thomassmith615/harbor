@@ -43,6 +43,7 @@ import { connectionsFor, threadNodes, topThreads } from "../store/relationships.
 import { nodeKey, parseNodeRef, summarize } from "../store/nodes.js";
 import type { NodeRef, NodeSummary } from "../store/nodes.js";
 import { episodeForItem, episodeItems, getEpisode, recentCorrespondents } from "../store/episodes.js";
+import { nameForHandle, nameHandles, nameTranscript } from "../store/entities.js";
 import { searchEpisodes } from "../retrieval/episodes.js";
 import { evidenceFor, listCommitments } from "../store/commitments.js";
 import { dedupePurchases, linesFor, listProjections, spendByMerchant } from "../store/projections.js";
@@ -450,10 +451,12 @@ function admitNode(
 
   void timezone;
 
+  // Resolved once, here, so situations and `related` both get names rather
+  // than each remembering to ask.
   return {
     summary,
-    title,
-    ...(author.length === 0 ? {} : { from: author }),
+    title: nameHandles(db, title),
+    ...(author.length === 0 ? {} : { from: nameForHandle(db, author) ?? author }),
   };
 }
 
@@ -755,13 +758,21 @@ export async function runTool(
         return null;
       }
 
+      // Names, not handles.
+      //
+      // This payload is what a model reads when somebody asks who they have
+      // been texting, and it used to be phone numbers: `with` was the raw
+      // participant list and the transcript's speaker labels were whatever the
+      // source called them. Harbor had 1,403 resolved people and 2,700
+      // identifiers and answered with a table of digits.
       return {
         id: episode.id,
-        with: episode.participants,
+        with: episode.participants.map((handle) => nameForHandle(db, handle) ?? handle),
+        title: episode.title === null ? undefined : nameHandles(db, episode.title),
         messages: episode.messageCount,
         when: humanWhen(episode.endsAt, context.timezone),
         started: humanWhen(episode.startsAt, context.timezone),
-        transcript: outcome.value,
+        transcript: nameTranscript(db, outcome.value),
         item_ids: items,
       };
     };
