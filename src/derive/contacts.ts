@@ -4,7 +4,7 @@
  * M5's rule was that an email address is an identity anchor and a name is not,
  * and that only a shared address or an explicit human instruction may merge two
  * entities. This is the explicit instruction. A contact card asserting that
- * dana@northlightco.com and dana.w@gmail.com are the same person was typed by
+ * dana@northlightco.com and dana.w@example.com are the same person was typed by
  * a human on purpose, which makes it better evidence than anything Harbor could
  * infer from correspondence patterns.
  *

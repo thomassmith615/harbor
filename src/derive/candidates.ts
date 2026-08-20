@@ -33,7 +33,7 @@
  *
  * The content generator is the fix, and it is deliberately not embeddings. A
  * cosine score cannot be checked by the person it is wrong about. Shared rare
- * words can: "both mention Kearneys" is an evidence line, and the rarity is
+ * words can: "both mention Brennans" is an evidence line, and the rarity is
  * measured against the user's own store rather than against English.
  *
  * Symmetry matters here. If A generates B as a candidate but B would not

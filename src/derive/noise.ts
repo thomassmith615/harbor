@@ -61,7 +61,7 @@ const NO_REPLY =
  * A subject with its variable parts removed.
  *
  * Numbers, money, and dates are exactly what differs between two instances of
- * one template, so they are what has to go. "You paid Christopher Hand $10.55"
+ * one template, so they are what has to go. "You paid Christopher Marsh $10.55"
  * and "$12.00" collapse to one shape; "Dinner Saturday?" collapses to itself.
  */
 export function titleShape(title: string | null): string {

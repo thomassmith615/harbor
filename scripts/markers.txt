@@ -13,3 +13,7 @@ SELF_SPEAKER:src/reasoning/tools.ts
 quotesBy:src/reasoning/tools.ts
 Who said a thing decides:src/reasoning/ask.ts
 source(s) failed:src/jobs/runner.ts
+purchaseFunnel:src/derive/extract.ts
+minTier:src/reasoning/router.ts
+nextTierAbove:src/derive/extract.ts
+source_episode = NULL:src/store/episodes.ts

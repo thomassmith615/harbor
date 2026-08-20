@@ -175,7 +175,7 @@ export const CONVERSATIONAL_CONNECTORS: readonly string[] = ["imessage"];
  * A contact card is a fact about who someone is. It has an `occurred_at`
  * because every item does, but that timestamp is when the card was written,
  * which is not when anything happened. Left in the graph it produced situations
- * like "Myles Menowitz: a contact card from March, and a payment three days
+ * like "Devin Ashford: a contact card from March, and a payment three days
  * later, across two sources", which is technically two sources and is not a
  * situation.
  *

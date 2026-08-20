@@ -101,8 +101,21 @@ function demoted(db: DB, taskClassId: string, tier: Tier): boolean {
  * task's capability and privacy requirements, sits at or above its floor, and
  * has not demoted itself on quality.
  */
-export function chooseTier(db: DB, task: TaskClass): Tier {
-  const floorIndex = task.floor === undefined ? 0 : TIERS.indexOf(task.floor);
+/** The next tier up, or null at the top of the ladder. */
+export function nextTierAbove(tier: Tier): Tier | null {
+  const index = TIERS.indexOf(tier);
+
+  return index < 0 || index >= TIERS.length - 1 ? null : (TIERS[index + 1] ?? null);
+}
+
+export function chooseTier(db: DB, task: TaskClass, minTier?: Tier): Tier {
+  const declared = task.floor === undefined ? 0 : TIERS.indexOf(task.floor);
+  const requested = minTier === undefined ? 0 : TIERS.indexOf(minTier);
+
+  // The higher of the two. A caller may raise the floor for one call; it may
+  // never lower one, or a task that must stay local could be pushed to the
+  // cloud by a retry.
+  const floorIndex = Math.max(declared, requested);
 
   for (let index = 0; index < TIERS.length; index += 1) {
     const tier = TIERS[index];
@@ -205,6 +218,21 @@ export interface RouteOptions {
   readonly redactions?: number;
   readonly ruleIds?: readonly string[];
   readonly onNote?: (message: string) => void;
+  /**
+   * Raise the floor for this one call.
+   *
+   * Escalation as an outcome rather than a prediction. A task class declares
+   * the cheapest tier that *might* work, and for structured extraction that is
+   * a 3B local model, which on a real mailbox produced hallucinated totals and
+   * English prose where JSON was required: 26 of 50 items failed verification
+   * and were silently dropped.
+   *
+   * Guessing difficulty up front is hard. Noticing that the cheap answer did
+   * not survive verification is trivial, and by then the evidence is in hand.
+   * So the caller retries the same request with the floor raised, and the
+   * expensive model is spent only on the items that actually needed it.
+   */
+  readonly minTier?: Tier;
 }
 
 export interface RouteResult {
@@ -294,7 +322,7 @@ export async function route(
     }
   }
 
-  const tier = chooseTier(db, task);
+  const tier = chooseTier(db, task, options.minTier);
   const provider = specFor(tier).create();
 
   const payload: CompletionRequest = {

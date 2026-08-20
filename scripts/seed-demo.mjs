@@ -93,7 +93,7 @@ if (phase === 2) {
     title: null,
     body: "did you see the email about saturday? 8:40 still works for me",
     snippet: "did you see the email about saturday?",
-    author: "Marcus Bell <marcus.bell@gmail.com>",
+    author: "Marcus Bell <marcus.bell@example.com>",
     participants: ["demo@example.com"],
     // Twenty minutes after the phase-one email from Marcus (which sits at
     // now - 35 hours), on a different source. That is the `adjacent` edge, and
@@ -120,13 +120,13 @@ if (phase === 2) {
 const inbound = [
   ["Talent Partners", "recruiting@talentpartners.com", "Senior backend role, quick chat?",
    "Hi, I came across your background in distributed systems and wanted to reach out about a Staff Backend role. Are you open to a 15 minute call this week?"],
-  ["Comcast", "billing@comcast.net", "Your September statement is ready",
+  ["Comcast", "billing@example.net", "Your September statement is ready",
    "Your statement for account ending 4417 is now available. Amount due $184.62, autopay scheduled for the 14th."],
   ["Dana Whitfield", "dana@northlightco.com", "Re: contract redlines",
    "Thanks for turning these around so fast. Section 7 still needs work but the rest looks good to me. Can we close this out by Friday?"],
   ["REI", "news@rei.com", "Member Rewards: 20% off one full-price item",
    "Your annual dividend is here. Redeem in store or online through the end of the month."],
-  ["Marcus Bell", "marcus.bell@gmail.com", "golf saturday?",
+  ["Marcus Bell", "marcus.bell@example.com", "golf saturday?",
    "Tee time at 8:40 if you're in. Bringing Nick and maybe Sam. Let me know by Thursday."],
   ["Dr. Reyes Office", "frontdesk@reyesdental.com", "Appointment reminder",
    "This is a reminder of your cleaning on Tuesday at 10:15 AM. Please arrive ten minutes early."],
@@ -206,9 +206,9 @@ const events = [
   ["Standup", 9 * HOUR, 15 * MINUTE, ["anna.kim@northlightco.com"], "Daily sync"],
   ["Contract review with Dana", 11 * HOUR, 60 * MINUTE, ["dana@northlightco.com"], "Section 7 redlines"],
   ["Lunch", 12.5 * HOUR, 45 * MINUTE, [], null],
-  ["Planning session", 14 * HOUR, 90 * MINUTE, ["anna.kim@northlightco.com", "marcus.bell@gmail.com"], "Q4 date decision"],
+  ["Planning session", 14 * HOUR, 90 * MINUTE, ["anna.kim@northlightco.com", "marcus.bell@example.com"], "Q4 date decision"],
   ["Dentist cleaning", 26 * HOUR + 10 * MINUTE, 45 * MINUTE, [], "Arrive ten minutes early"],
-  ["Golf with Marcus", 4 * 24 * HOUR + 8.67 * HOUR, 4 * HOUR, ["marcus.bell@gmail.com"], "Tee time 8:40"],
+  ["Golf with Marcus", 4 * 24 * HOUR + 8.67 * HOUR, 4 * HOUR, ["marcus.bell@example.com"], "Tee time 8:40"],
 ];
 
 let eventIndex = 0;
@@ -236,12 +236,12 @@ for (const [title, offset, duration, attendees, description] of events) {
 // A conversation, the way one actually looks: short fragments over an evening,
 // none of which means anything alone. This is what episodes exist for.
 const chat = [
-  ["them", "Marcus Bell <marcus.bell@gmail.com>", "so are we doing vermont in october or not"],
+  ["them", "Marcus Bell <marcus.bell@example.com>", "so are we doing vermont in october or not"],
   ["me", null, "i think so. depends whether the cabin near stowe is still open"],
-  ["them", "Marcus Bell <marcus.bell@gmail.com>", "i can check. how many nights"],
+  ["them", "Marcus Bell <marcus.bell@example.com>", "i can check. how many nights"],
   ["me", null, "two? drive up friday after work, back sunday"],
-  ["them", "Marcus Bell <marcus.bell@gmail.com>", "works. ill look tonight"],
-  ["them", "Marcus Bell <marcus.bell@gmail.com>", "also we need to sort out the ski rack situation"],
+  ["them", "Marcus Bell <marcus.bell@example.com>", "works. ill look tonight"],
+  ["them", "Marcus Bell <marcus.bell@example.com>", "also we need to sort out the ski rack situation"],
   ["me", null, "yeah i still need to buy one. adding a reminder"],
 ];
 
@@ -260,7 +260,7 @@ for (const [who, author, body] of chat) {
     body,
     snippet: body.slice(0, 140),
     author: author ?? "demo@example.com",
-    participants: who === "me" ? ["marcus.bell@gmail.com"] : ["demo@example.com"],
+    participants: who === "me" ? ["marcus.bell@example.com"] : ["demo@example.com"],
     // A few minutes apart, six days ago: one episode, not seven items.
     occurredAt: now - 6 * DAY + chatIndex * 4 * 60_000,
     uri: null,

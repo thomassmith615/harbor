@@ -54,8 +54,8 @@ rather than gating it.
 `npm test`. Twenty-three assertions against a synthetic four-source store, about
 a second, no credentials and no model server. The graph it produces:
 
-    arranges          0.85  conversation <-> "Dinner at the Kearneys"
-        this names "Dinner at the Kearneys", which is on the calendar 4 days later
+    arranges          0.85  conversation <-> "Dinner at the Brennans"
+        this names "Dinner at the Brennans", which is on the calendar 4 days later
     shares_reference  0.95  "Your trip confirmation" <-> "Itinerary update"
         both mention NKQ8ZT2                              (141 days apart)
     tracks            0.70  "About your appointment" <-> "Reschedule dentist"

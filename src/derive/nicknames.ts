@@ -1,7 +1,7 @@
 /**
  * Nicknames.
  *
- * A card says "Isabella Forté". Nobody types that. They type "issy", and until
+ * A card says "Esperanza Duprée". Nobody types that. They type "essy", and until
  * now that found nothing, so the user learned to type full names, which is the
  * kind of small failure that quietly teaches people the tool is dumb.
  *
@@ -9,7 +9,7 @@
  * derived nickname is a guess, two people can plausibly share one, and an
  * identifier row could not represent that without one silently swallowing the
  * other. So aliases live in their own table, have no uniqueness, widen lookup,
- * and never merge anything. When "issy" matches two people, the answer is to
+ * and never merge anything. When "essy" matches two people, the answer is to
  * ask which, not to pick.
  */
 
@@ -43,7 +43,7 @@ const IRREGULAR: Readonly<Record<string, readonly string[]>> = {
   michael: ["mike", "mickey", "mick"],
   patrick: ["pat", "paddy", "rick"],
   daniel: ["dan", "danny"],
-  thomas: ["tom", "tommy"],
+  alex: ["tom", "tommy"],
   christopher: ["chris", "kit", "topher"],
   nicholas: ["nick", "nicky", "cole"],
   alexander: ["alex", "xander", "sasha", "lex"],
@@ -51,7 +51,7 @@ const IRREGULAR: Readonly<Record<string, readonly string[]>> = {
   jonathan: ["jon", "johnny", "nate"],
   francis: ["frank", "frankie"],
   frances: ["fran", "franny"],
-  isabella: ["bella", "belle", "isa"],
+  esperanza: ["bella", "belle", "isa"],
   isabel: ["bella", "belle", "isa"],
   eleanor: ["nell", "ellie", "nora"],
   virginia: ["ginny", "ginger"],
@@ -75,7 +75,7 @@ const IRREGULAR: Readonly<Record<string, readonly string[]>> = {
 const SUFFIXES = ["y", "ie", "i", "s"] as const;
 
 /**
- * Removes accents so "Forté" and "Forte" are the same word.
+ * Removes accents so "Duprée" and "Dupree" are the same word.
  *
  * Search that fails on a diacritic is search that fails on exactly the names
  * people are least likely to type carefully.
@@ -94,8 +94,8 @@ export function fold(input: string): string {
  * Shortened forms of one given name.
  *
  * The generative half. Take the first two to four letters, optionally double
- * the final consonant, add a diminutive ending. That is where "Issy" comes from:
- * Isabella cut to "Is", doubled to "Iss", plus "y".
+ * the final consonant, add a diminutive ending. That is where "Essy" comes from:
+ * Esperanza cut to "Is", doubled to "Iss", plus "y".
  *
  * It over-generates on purpose. An alias that nobody ever types costs one row;
  * a missing one costs a failed search and a person concluding it does not work.
@@ -111,8 +111,8 @@ function shortForms(name: string): readonly string[] {
 
   // Two-letter stems are kept, but only when they double.
   //
-  // This is the Issy case, and it is the whole reason the rule exists. Isabella
-  // cut to "Is" and doubled gives "Iss", plus a diminutive ending gives "Issy",
+  // This is the Essy case, and it is the whole reason the rule exists. Esperanza
+  // cut to "Is" and doubled gives "Iss", plus a diminutive ending gives "Essy",
   // which is what someone actually types. Dropping two-letter stems entirely
   // loses that; keeping their bare form ("is", "ma") produces fragments nobody
   // says. So: doubled forms from two letters, everything from three or more.
@@ -144,8 +144,8 @@ function shortForms(name: string): readonly string[] {
       found.add(doubled);
     }
 
-    // An "s" that doubles usually takes the z sound in speech: Isabella gives
-    // Izzy far more often than Issy, and both are worth having.
+    // An "s" that doubles usually takes the z sound in speech: Esperanza gives
+    // Ezzy far more often than Essy, and both are worth having.
     if (last === "s") {
       const zed = `${stem.slice(0, -1)}zz`;
       found.add(zed);

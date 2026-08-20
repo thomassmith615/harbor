@@ -293,7 +293,7 @@ function backfillAliases(db: DB): number {
     for (const row of batch) {
       // Two words, both looking like a name.
       //
-      // "Ubisoft Account Support" and "Episcopal Academy Alumni Society" are
+      // "Ubisoft Account Support" and "Thornbury School Alumni Society" are
       // not people, whatever the resolver decided, and generating diminutives
       // from them fills the alias table with words nobody would ever type.
       if (!isUsefulName(row.display_name) || !looksPersonal(row.display_name)) {

@@ -335,7 +335,7 @@ function titleFor(db: DB, nodes: readonly NodeFacts[]): string | null {
   }
 
   // A subject line beats a handle, whatever order the nodes are in: "crabbing"
-  // says what the situation is and "+13392047146" makes you go and look.
+  // says what the situation is and "+15550100002" makes you go and look.
   const titled = nodes.find(
     (node) => (node.title ?? "").length > 3 && !isHandleTitle(node.title ?? ""),
   );

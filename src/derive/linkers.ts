@@ -228,7 +228,7 @@ const arranges: PairLinker = {
     const words = sharedDistinctive(message, event, context.terms);
 
     // Naming the event is the strongest signal available and does not need a
-    // person: an event called "Dinner at the Kearneys" mentioned in a text is
+    // person: an event called "Dinner at the Brennans" mentioned in a text is
     // not a coincidence.
     const title = (event.title ?? "").toLowerCase().trim();
     const named = title.length > 6 && message.text.toLowerCase().includes(title);

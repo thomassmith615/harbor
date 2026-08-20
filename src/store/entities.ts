@@ -352,9 +352,9 @@ export function topEntities(
  * Four ways in, in order of how exact they are: an entity id, an alias, a
  * display name, an identifier. A phone number typed in any format is folded to
  * E.164 first, so "(610) 555-0134" finds the person iMessage knows as
- * "+16105550134".
+ * "+15550100006".
  *
- * Ordered by how much correspondence there is, because when "issy" matches two
+ * Ordered by how much correspondence there is, because when "essy" matches two
  * people the one you actually talk to is almost always the one you meant. The
  * tool layer still says how many matched rather than picking silently.
  */
@@ -362,8 +362,8 @@ export function lookupEntities(db: DB, query: string, limit = 10): readonly Enti
   const trimmed = query.trim();
 
   // Folding strips punctuation so accents and spacing do not matter, which is
-  // right for names and wrong for addresses: it turns issy@example.com into
-  // issyexamplecom and the lookup finds nothing. An address is matched as
+  // right for names and wrong for addresses: it turns essy@example.com into
+  // essyexamplecom and the lookup finds nothing. An address is matched as
   // typed.
   const isAddress = trimmed.includes("@");
   const folded = isAddress ? trimmed.toLowerCase() : fold(trimmed);
@@ -371,10 +371,10 @@ export function lookupEntities(db: DB, query: string, limit = 10): readonly Enti
   // Aliases match exactly or by prefix, never as a substring.
   //
   // Substring matching on generated nicknames was catastrophic: "Ubisoft
-  // Account Support" generates "ubissy", "Discord" generates "dissy", and
-  // `LIKE %issy%` matched all of them. Searching for a person returned five
+  // Account Support" generates "ubessy", "Discord" generates "dessy", and
+  // `LIKE %essy%` matched all of them. Searching for a person returned five
   // companies. A nickname is a whole word someone says, so anchoring it at the
-  // start is both correct and enough to keep "iz" finding "izzy".
+  // start is both correct and enough to keep "iz" finding "ezzy".
   const prefix = `${folded}%`;
   const phone = looksLikePhone(trimmed) ? normalizePhone(trimmed) : null;
 
@@ -492,7 +492,7 @@ export function unlinkIdentifier(db: DB, kind: IdentifierKind, normalized: strin
 /**
  * Aliases: how a person might be referred to, as opposed to who they are.
  *
- * No uniqueness on purpose. Two people can both be "issy", and an identifier
+ * No uniqueness on purpose. Two people can both be "essy", and an identifier
  * row could not represent that without one silently swallowing the other, which
  * is precisely the merge-two-people failure the whole entity design is built to
  * avoid. Aliases widen lookup and never anchor anything.
@@ -621,15 +621,15 @@ export function listSelfHandles(db: DB): readonly SelfHandleRow[] {
  *
  * Lives here rather than beside the code that first needed it, which is the
  * whole point of moving it. It was written for situation titles and stayed
- * private to that file, so `harbor situations` said "Isabella Forté" while the
+ * private to that file, so `harbor situations` said "Esperanza Duprée" while the
  * chat answering "who have I texted today" printed a table of phone numbers.
  * The resolution existed, knew the answer, and was never called by the layer a
  * person actually reads.
  *
  * A conversation's title is whatever the source called it, which for iMessage
  * is a phone number or a list of them. Four of the situations on a real run
- * were named things like `+13392047146`, and Harbor had 2,750 identifiers and
- * 1,403 resolved people at the time: it knew perfectly well that was Isabella
+ * were named things like `+15550100002`, and Harbor had 2,750 identifiers and
+ * 1,403 resolved people at the time: it knew perfectly well that was Esperanza
  * and printed the digits anyway.
  *
  * Only display. Nothing here is stored, and the underlying handles are

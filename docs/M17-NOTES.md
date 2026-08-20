@@ -18,7 +18,7 @@ them. Run `harbor dev extract` a few times, or leave the daemon to it.
        675.99  PayPal           1 purchase
        514.98  GEEKSQUAD        2 purchases
        249.99  GEEK SQUAD       1 purchase
-       411.98  PGA TOUR Superstore  2 purchases
+       411.98  Fairway Supply  2 purchases
 
 Four separate faults in five lines.
 
@@ -40,14 +40,14 @@ part an attacker controls and writes convincingly. A receipt from gmail.com is
 not a receipt, and a display name claiming a brand its domain does not is either
 a scam or a forward. Both run in the free predicate, before any model is called.
 
-**One pizza place counted three times.** `The Tomato Shack - Conshohocken`,
-`Tomato Shack - Conshohocken`, and `The Tomato Shack - Conshohocke`, the last
+**One pizza place counted three times.** `The Pepper Barn - Bridgeton`,
+`Pepper Barn - Bridgeton`, and `The Pepper Barn - Bridgeto`, the last
 truncated by a column width. `GEEKSQUAD` and `GEEK SQUAD` likewise. Merchants
 are grouped by a normalised key now, and the displayed name is the longest
 variant, since truncation is the usual cause of variance.
 
 The prefix rule has a twelve-character floor on purpose: it must join
-`...Conshohocke` to `...Conshohocken` without joining `Uber` to `Uber Eats`,
+`...Bridgeto` to `...Bridgeton` without joining `Uber` to `Uber Eats`,
 which are different businesses sharing a stem.
 
 **One launch monitor bought twice.** $199.99 at midnight and $211.99 at nine the
@@ -175,7 +175,7 @@ item that used to be unreadable gets another chance.
 
 ## 0.39.0
 
-`store+75632214210@t.shopifyemail.com` looked like a solid envelope and is
+`store+10000000000@t.shopifyemail.com` looked like a solid envelope and is
 nothing of the kind. Every Shopify store on earth sends from that domain, a real
 boutique and a dropship front alike, and the same is true of SendGrid, Mailgun,
 Klaviyo, Mailchimp, and most of what a small merchant uses.

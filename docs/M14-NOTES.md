@@ -53,15 +53,15 @@ own words in every conversation within three weeks. Beyond seven days it is a
 different haircut.
 
 **Titles work now, and the cause was sillier than expected.** An episode's title
-had the message count baked into it, so "+16103902494" was a recognisable phone
-number and "+16103902494 (15 messages)" was not. Raw handles therefore beat real
+had the message count baked into it, so "+15550100005" was a recognisable phone
+number and "+15550100005 (15 messages)" was not. Raw handles therefore beat real
 subject lines in the naming contest, which is why you saw a situation named
 after a phone number that also contained four "Re: Vehicle Registration" emails,
 and why every conversation line printed its count twice. The count is gone from
 the title, group-chat handle lists are recognised, and handles resolve to names.
 
-**Joey Dugery is two entities**, `+16103902494` with 2,038 items and
-`jdugery16@gmail.com` with 3. That is entity resolution working as designed: an
+**Joey Halloran is two entities**, `+15550100005` with 2,038 items and
+`jhalloran16@example.com` with 3. That is entity resolution working as designed: an
 address and a phone number are separate anchors and nothing links them, so it
 under-merges rather than guessing. `harbor people merge` fixes it permanently.
 I am not making name-matching link anchors automatically; silently welding two

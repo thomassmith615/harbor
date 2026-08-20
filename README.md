@@ -12,6 +12,60 @@ Everything derived is rebuildable from what was fetched. Every claim carries the
 evidence it was built from. Nothing leaves this machine except through one gate,
 and that gate is audited.
 
+Running against a real store: ~41,000 items across five sources, 2,200
+conversations, 1,600 resolved people, and 49 situations that span more than one
+source. Roughly 177 tests.
+
+## What is worth looking at
+
+If you are reading this to see how it is built rather than to run it, these are
+the parts with actual decisions in them.
+
+**Situations have durable identity.** A situation is a connected component of
+the relationship graph, recomputed every pass. Its *id* is not: components are
+proposals, and a matcher carries ids forward by membership overlap, so a
+situation you renamed or dismissed survives being re-derived. The id used to be
+a hash of its contents, which meant one new message destroyed it and every
+dismissal silently came back. `src/derive/situations.ts`.
+
+**Every edge carries readable evidence.** Links between items are drawn by
+deterministic linkers, not by asking a model, and each records why in a sentence
+a person can check: *both mention a rare word, from different sources, eight
+days apart*. `harbor why <id>` replays what was considered and what was
+rejected, using the same code the pass uses, because an explanation derived from
+a second implementation eventually describes a system that no longer exists.
+`src/derive/relate.ts`.
+
+**Retrieval is hybrid and knows what it is missing.** Lexical and semantic
+search combined, with a coverage model so Harbor can say a search ran over an
+incomplete picture rather than implying it saw everything. `src/retrieval/`.
+
+**Models are a replaceable component with a cost ladder.** Tasks declare the
+cheapest tier that might work and the capabilities they need. Structured
+extraction starts on a 3B local model at zero cost; when an answer fails
+verification it retries one tier up, climbing to a larger local model before it
+spends anything at all. Escalation is an outcome, not a prediction.
+`src/reasoning/router.ts`.
+
+**Extraction is verified, not trusted.** A model reading a receipt will invent a
+total. Every extracted purchase is checked against the source text and rejected
+if the number does not appear in it. `src/projections/purchase.ts`.
+
+**One egress gate.** Content reaching a cloud model passes a single policy
+check: restricted items are withheld, sensitive ones redacted, and the model is
+told what it did not get so it cannot answer as though the picture were
+complete. `src/policy/gate.ts`.
+
+**Speaker attribution.** A transcript is several people talking. Something you
+said is not evidence about the person you said it to, so tool payloads label
+your own lines unambiguously and expose a per-speaker filter. This was a real
+bug: asked what somebody liked, Harbor answered from things the user had said to
+them. `src/reasoning/tools.ts`.
+
+The comments throughout explain why a thing is the way it is, usually including
+what the previous attempt got wrong. `docs/` holds the milestone notes, which
+are the same thing at a larger scale.
+
 ## Running it
 
 ```
@@ -116,7 +170,7 @@ elsewhere, and only your corpus knows which. The ceiling is 2% of the store,
 floored at 5 and capped at 500; `harbor why` prints what it decided.
 
 Deliberately not embeddings. A cosine score cannot be checked by the person it is
-wrong about; "both mention Kearneys" can.
+wrong about; "both mention Brennans" can.
 
 A **situation** is a connected component of that graph spanning more than one
 source. One source is a conversation, and Messages already shows it better than

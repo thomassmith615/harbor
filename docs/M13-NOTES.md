@@ -58,8 +58,8 @@ edge weaker, not wrong.
 
 ## Situations have names again
 
-Four were titled things like `+13392047146`, while Harbor held 2,750 identifiers
-and 1,403 resolved people and knew perfectly well that was Isabella. Handles in
+Four were titled things like `+15550100002`, while Harbor held 2,750 identifiers
+and 1,403 resolved people and knew perfectly well that was Esperanza. Handles in
 a title are resolved to names at display time, a subject line beats a handle
 whatever order the nodes are in, and more than three participants collapses to
 "and N others".

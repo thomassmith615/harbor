@@ -10,7 +10,7 @@
  * "search my contacts" is a reasonable thing to want.
  *
  * The real value is what `derive/contacts.ts` does with them. A card asserting
- * that dana@work.com and dana.w@gmail.com are one person is the strongest
+ * that dana@work.com and dana.w@example.com are one person is the strongest
  * identity signal Harbor can get, because a human typed it deliberately. M5's
  * rule was that only a shared address or an explicit instruction may merge two
  * entities. An address book is an explicit instruction.

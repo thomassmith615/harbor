@@ -2,7 +2,7 @@
  * The relationship layer, pinned.
  *
  * Every assertion here corresponds to something that was actually wrong, or to
- * something that would be wrong silently if it broke. That is the standard for
+ * something that would be wrong silently if it broke. That is the stlarkspurd for
  * adding a test to this file: not coverage, but "if this regressed, how long
  * would it take anybody to notice". The answer for most of the graph is weeks,
  * because a missing edge looks exactly like a question Harbor could not answer.
@@ -94,7 +94,7 @@ describe("the graph reaches across sources", () => {
 
     assert.ok(
       connected(conversation, event),
-      "the Kearney conversation is not connected to the Kearney dinner",
+      "the Brennan conversation is not connected to the Brennan dinner",
     );
   });
 
@@ -145,7 +145,7 @@ describe("the failures from the first real run", () => {
     // A card carries a timestamp and nothing that happened, so "a contact card
     // from March and a payment three days later" read as a two-source
     // discovery.
-    const card: NodeRef = { kind: "item", id: itemFor("card-myles") };
+    const card: NodeRef = { kind: "item", id: itemFor("card-devin") };
 
     assert.equal(
       edgesFor(store.db, card).length,
@@ -295,12 +295,12 @@ describe("the failures from the first real run", () => {
     // is in the tracking pixel at the bottom of thousands of marketing emails.
     const terms = contentTerms(
       "Your statement is ready. https://tracking.us-east-1.amazonaws.com/x?id=9 " +
-        "Visit example.com for details about the Kearneys.",
+        "Visit example.com for details about the Brennans.",
     );
 
     assert.ok(!terms.includes("amazonaws"), `link host leaked into terms: ${terms.join(", ")}`);
     assert.ok(!terms.includes("example"), `link host leaked into terms: ${terms.join(", ")}`);
-    assert.ok(terms.includes("kearneys"), "stripping links also removed real words");
+    assert.ok(terms.includes("brennans"), "stripping links also removed real words");
   });
 });
 
@@ -372,9 +372,9 @@ describe("conversations are the unit, not messages", () => {
 
     assert.ok(found.length > 0, "no cross-source situations at all");
 
-    const dinner = found.find((thread) => (thread.title ?? "").includes("Kearney"));
+    const dinner = found.find((thread) => (thread.title ?? "").includes("Brennan"));
 
-    assert.ok(dinner !== undefined, "the Kearney dinner is not a situation");
+    assert.ok(dinner !== undefined, "the Brennan dinner is not a situation");
 
     const nodes = threadNodes(store.db, dinner.id);
 
@@ -437,8 +437,8 @@ describe("explanation matches the pass", () => {
     assert.ok(result !== null);
     assert.ok(result.candidates.length > 0, "the dinner event generated no candidates");
     assert.ok(
-      result.distinctive.some((term) => term.includes("kearney")),
-      `"kearneys" was not treated as distinctive; got ${result.distinctive.join(", ")}`,
+      result.distinctive.some((term) => term.includes("brennan")),
+      `"brennans" was not treated as distinctive; got ${result.distinctive.join(", ")}`,
     );
 
     const drawn = result.candidates.filter((candidate) => candidate.drawn.length > 0);

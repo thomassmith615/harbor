@@ -15,7 +15,7 @@
  * The obvious fix is embeddings, and it is the wrong one. A cosine score is not
  * evidence anybody can check, and the deterministic-first stance is worth more
  * than the recall. Rare-term overlap gets most of the way there and produces an
- * evidence line a person can read: "both mention Kearneys". Deterministic does
+ * evidence line a person can read: "both mention Brennans". Deterministic does
  * not have to mean identity-only, which is the assumption the code had drifted
  * into.
  *

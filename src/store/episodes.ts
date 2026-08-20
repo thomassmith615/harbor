@@ -168,6 +168,20 @@ export function pruneEpisodes(
 
   const work = db.transaction(() => {
     for (const row of doomed) {
+      // A representative item from this episode, captured at the top of the
+      // loop because the deletes below remove episode_items. Reading it after
+      // them always found nothing, so every cited commitment was deleted
+      // instead of repointed: the constraint stopped failing and the evidence
+      // quietly disappeared, which is the worse of the two outcomes.
+      const stand = db
+        .prepare(
+          `SELECT item_id AS id FROM episode_items ei
+           JOIN items i ON i.id = ei.item_id
+           WHERE ei.episode_id = ? AND i.deleted_at IS NULL
+           ORDER BY i.occurred_at LIMIT 1`,
+        )
+        .get(row.id) as { id: string } | undefined;
+
       db.prepare(
         `DELETE FROM embeddings WHERE chunk_id IN
            (SELECT id FROM episode_chunks WHERE episode_id = ?)`,
@@ -175,6 +189,45 @@ export function pruneEpisodes(
       db.prepare(`DELETE FROM episode_chunks WHERE episode_id = ?`).run(row.id);
       db.prepare(`DELETE FROM episode_items WHERE episode_id = ?`).run(row.id);
       db.prepare(`DELETE FROM episodes_fts WHERE episode_id = ?`).run(row.id);
+
+      // Evidence and facts cite episodes.
+      //
+      // This is what was failing derive. Those two tables were added after
+      // this function, nothing came back to update it, and the delete below
+      // hit a foreign key it did not know existed. The effect was quiet and
+      // total: once any commitment or fact cited an episode, that episode
+      // could never be re-segmented again, so every derive pass touching it
+      // aborted with `FOREIGN KEY constraint failed` and the whole pipeline
+      // stopped. Three hundred items sat unprocessed behind it.
+      //
+      // Repointed, not cascaded. A commitment does not stop being true because
+      // the conversation it came from was re-segmented, and deleting it would
+      // destroy real understanding to satisfy a bookkeeping constraint.
+      //
+      // `commitment_evidence` carries CHECK ((item_id IS NULL) <> (episode_id
+      // IS NULL)), so nulling the episode alone just trades one constraint
+      // failure for another. Pointing at an item from the same episode keeps
+      // the evidence real and satisfies the check: the citation loses
+      // conversation granularity and keeps its source.
+      //
+      // With no surviving item there is nothing truthful left to point at, and
+      // an evidence row citing nothing is worse than none.
+      if (stand === undefined) {
+        db.prepare(`DELETE FROM commitment_evidence WHERE episode_id = ?`).run(row.id);
+      } else {
+        db.prepare(
+          `UPDATE commitment_evidence SET episode_id = NULL, item_id = ?
+           WHERE episode_id = ? AND item_id IS NULL`,
+        ).run(stand.id, row.id);
+      }
+
+      // `facts` has no such check, and keeps whatever source_item it already
+      // had, so the episode link is simply dropped.
+      db.prepare(
+        `UPDATE facts SET source_episode = NULL, source_item = COALESCE(source_item, ?)
+         WHERE source_episode = ?`,
+      ).run(stand?.id ?? null, row.id);
+
       db.prepare(`DELETE FROM episodes WHERE id = ?`).run(row.id);
     }
   });

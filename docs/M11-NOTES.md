@@ -14,7 +14,7 @@ denied".
 
 **Contacts were graph nodes.** A contact card is a fact about who someone is,
 not something that happened. Its `occurred_at` is when the card was written,
-which is why `Myles Menowitz` read as a two-source situation spanning three
+which is why `Devin Ashford` read as a two-source situation spanning three
 days. Contacts still do the most important job in the store, turning addresses
 and phone numbers into people; they are simply not endpoints.
 
@@ -77,13 +77,13 @@ proving it needs a forty-thousand-document store and the mistake is arithmetic:
 
 ## Two things from your run I did not fix
 
-**Your self entity holds five identifiers**, including `leanbrizko@gmail.com`
+**Your self entity holds five identifiers**, including `l.brizko@example.com`
 and a second phone number. If either is not yours, `harbor people unlink
 <address>` splits it. The merge path treats any address seen as an outbound
 author as definitively you, which is too strong if a forwarded message ever put
 someone else in a From header. Tell me if it is wrong and I will tighten it.
 
-**`harbor people show thomas smith` finds a Google Docs notification** rather
+**`harbor people show alex smith` finds a Google Docs notification** rather
 than you, because your self entity's display name is an email address. Small,
 and it will annoy you every time.
 

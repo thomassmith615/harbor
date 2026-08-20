@@ -53,7 +53,7 @@ their episode. Conversational streams are excluded now.
 
 ## Where the Venmo case landed
 
-You said pairing "You paid Joey Dugery $614.00" to the apartment conversation
+You said pairing "You paid Joey Halloran $614.00" to the apartment conversation
 would be hard and that grouping it with other Venmos might be acceptable. It now
 does neither: Venmo is one-way mail, so it forms no situation at all. It stays
 fully searchable and still feeds `harbor purchases`, which is where a payment

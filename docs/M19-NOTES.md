@@ -56,7 +56,7 @@ in your report and the money went the other way: a refund for a seat selection
 that did not go through. Rejected rather than negated, because guessing the sign
 of the largest number in the report is not the way to begin.
 
-**Merchant names that are not names.** `pgatoursuperstore@mail.pgatour` is an
+**Merchant names that are not names.** `fairwaysupply@mail.pgatour` is an
 address, `ParkMobile, LLC All Rights Res` is a footer, `Microsoft Corporatio...`
 is a truncation. Cleaned where cleaning is unambiguous, rejected where it is
 not, because the total is usually right even when the name was scraped from the

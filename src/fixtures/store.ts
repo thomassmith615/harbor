@@ -91,7 +91,7 @@ export function seedFixture(db: DB): Fixture {
 
   const sources: readonly { readonly type: string; readonly label: string; readonly connector: string }[] = [
     { type: "imessage", label: "iMessage", connector: "imessage" },
-    { type: "imap", label: "me@comcast.net", connector: "imap" },
+    { type: "imap", label: "me@example.net", connector: "imap" },
     { type: "apple", label: "icloud-calendar", connector: "apple-calendar" },
     { type: "apple", label: "icloud-reminders", connector: "apple-reminders" },
     { type: "apple", label: "icloud-contacts", connector: "apple-contacts" },
@@ -145,9 +145,9 @@ const SEEDS: readonly Seed[] = [
     externalId: "msg-dinner-1",
     kind: "message",
     direction: "inbound",
-    threadId: "chat-kearney",
+    threadId: "chat-brennan",
     title: "+15551230001",
-    body: "are we still on for the Kearney thing saturday",
+    body: "are we still on for the Brennan thing saturday",
     author: "+15551230001",
     participants: ["+15551230001"],
     at: NOW - 6 * DAY,
@@ -157,9 +157,9 @@ const SEEDS: readonly Seed[] = [
     externalId: "msg-dinner-2",
     kind: "message",
     direction: "outbound",
-    threadId: "chat-kearney",
+    threadId: "chat-brennan",
     title: "+15551230001",
-    body: "yes, dinner at the Kearneys, 7pm. bringing the rhubarb tart",
+    body: "yes, dinner at the Brennans, 7pm. bringing the rhubarb tart",
     participants: ["+15551230001"],
     at: NOW - 6 * DAY + HOUR,
   },
@@ -168,7 +168,7 @@ const SEEDS: readonly Seed[] = [
     externalId: "msg-dinner-3",
     kind: "message",
     direction: "inbound",
-    threadId: "chat-kearney",
+    threadId: "chat-brennan",
     title: "+15551230001",
     body: "perfect, see you then",
     author: "+15551230001",
@@ -180,7 +180,7 @@ const SEEDS: readonly Seed[] = [
     stream: "apple-calendar",
     externalId: "evt-dinner",
     kind: "event",
-    title: "Dinner at the Kearneys",
+    title: "Dinner at the Brennans",
     body: null,
     participants: [],
     at: NOW - 2 * DAY,
@@ -199,7 +199,7 @@ const SEEDS: readonly Seed[] = [
       "Thanks for booking. Confirmation NKQ8ZT2 for two nights in Stowe. " +
       "Check in from 4pm.",
     author: "reservations@example-lodge.test",
-    participants: ["me@comcast.net"],
+    participants: ["me@example.net"],
     at: NOW - 150 * DAY,
   },
   {
@@ -211,7 +211,7 @@ const SEEDS: readonly Seed[] = [
     title: "Itinerary update",
     body: "Your booking NKQ8ZT2 has been updated. Flight AA 4608 departs 6:10am.",
     author: "noreply@example-air.test",
-    participants: ["me@comcast.net"],
+    participants: ["me@example.net"],
     at: NOW - 9 * DAY,
   },
 
@@ -237,7 +237,7 @@ const SEEDS: readonly Seed[] = [
       "We need to reschedule your dentist appointment on the 19th. " +
       "Please call the office to pick a new time.",
     author: "front-desk@example-dental.test",
-    participants: ["me@comcast.net"],
+    participants: ["me@example.net"],
     at: NOW - 5 * DAY,
   },
 
@@ -279,23 +279,23 @@ const SEEDS: readonly Seed[] = [
   // ---- card: reference data, not something that happened ----
   {
     stream: "apple-contacts",
-    externalId: "card-myles",
+    externalId: "card-devin",
     kind: "contact",
-    title: "Myles Menowitz",
-    body: "Myles Menowitz +15551230011",
+    title: "Devin Ashford",
+    body: "Devin Ashford +15551230011",
     participants: ["+15551230011"],
     at: NOW - 40 * DAY,
   },
   {
     stream: "imap",
-    externalId: "mail-myles",
+    externalId: "mail-devin",
     kind: "message",
     direction: "inbound",
-    threadId: "thread-myles",
-    title: "You paid Myles Menowitz $437.74",
-    body: "You paid Myles Menowitz $437.74. View your transaction in the app.",
+    threadId: "thread-devin",
+    title: "You paid Devin Ashford $437.74",
+    body: "You paid Devin Ashford $437.74. View your transaction in the app.",
     author: "venmo@venmo.test",
-    participants: ["me@comcast.net"],
+    participants: ["me@example.net"],
     at: NOW - 37 * DAY,
   },
 
@@ -306,12 +306,12 @@ const SEEDS: readonly Seed[] = [
     kind: "message",
     direction: "inbound" as const,
     threadId: `thread-venmo-${String(index)}`,
-    title: `You paid Christopher Hand $${String(10 + index)}.55`,
+    title: `You paid Christopher Marsh $${String(10 + index)}.55`,
     body:
-      `You paid Christopher Hand $${String(10 + index)}.55. ` +
+      `You paid Christopher Marsh $${String(10 + index)}.55. ` +
       "View your transaction in the app.",
     author: "venmo@venmo.test",
-    participants: ["me@comcast.net"],
+    participants: ["me@example.net"],
     at: NOW - (60 - index * 7) * DAY,
   })),
 
@@ -328,7 +328,7 @@ const SEEDS: readonly Seed[] = [
     title: "Exciting DevOps Engineer opportunity",
     body: "I came across your profile and thought of this devops role in Marlborough.",
     author: "inmail-hit-reply@linkedin.test",
-    participants: ["me@comcast.net"],
+    participants: ["me@example.net"],
     at: NOW - 30 * DAY,
   },
   {
@@ -340,7 +340,7 @@ const SEEDS: readonly Seed[] = [
     title: "Senior devops role, Marlborough",
     body: "Another devops opening in Marlborough you may find interesting.",
     author: "inmail-hit-reply@linkedin.test",
-    participants: ["me@comcast.net"],
+    participants: ["me@example.net"],
     at: NOW - 25 * DAY,
   },
   {
@@ -370,7 +370,7 @@ const SEEDS: readonly Seed[] = [
     title: "Will YOU become a millionaire? Wildwood getaway included",
     body: "Claim your prize now. A Wildwood getaway could be yours this August.",
     author: "prizes@sweepstakes-once.test",
-    participants: ["me@comcast.net"],
+    participants: ["me@example.net"],
     at: NOW - 18 * DAY,
   },
 
@@ -422,7 +422,7 @@ const SEEDS: readonly Seed[] = [
       "Shop now for spring bulbs, 20% off. Limited time. Unsubscribe to stop " +
       "receiving these emails.",
     author: "news@example-garden.test",
-    participants: ["me@comcast.net"],
+    participants: ["me@example.net"],
     at: NOW - 3 * DAY,
   },
   {

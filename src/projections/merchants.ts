@@ -5,8 +5,8 @@
  * good as the identity attached to it.
  *
  * **Merchant identity.** `GEEKSQUAD` and `GEEK SQUAD` were separate merchants.
- * So were `The Tomato Shack - Conshohocken`, `Tomato Shack - Conshohocken`, and
- * `The Tomato Shack - Conshohocke`, the last one truncated by a column width.
+ * So were `The Pepper Barn - Bridgeton`, `Pepper Barn - Bridgeton`, and
+ * `The Pepper Barn - Bridgeto`, the last one truncated by a column width.
  * Spending by merchant is the whole point of the projection and it was split
  * three ways for one pizza place.
  *
@@ -179,7 +179,7 @@ export function merchantKey(name: string): string {
  *
  * Exact after normalisation, or one is a prefix of the other and the shorter is
  * long enough to be distinctive. The prefix rule is what joins
- * `thetomatoshackconshohocke` to `thetomatoshackconshohocken`; the length floor
+ * `thetomatoshackbridgeto` to `thetomatoshackbridgeton`; the length floor
  * is what stops `uber` joining `ubereats`, which are genuinely different
  * merchants that happen to share a stem.
  */
@@ -269,7 +269,7 @@ export function isTransfer(merchant: string | null): boolean {
  * Sending platforms, where the domain identifies the platform and not the
  * merchant.
  *
- * `store+75632214210@t.shopifyemail.com` looked like a solid envelope and is
+ * `store+10000000000@t.shopifyemail.com` looked like a solid envelope and is
  * nothing of the kind: every Shopify store on earth sends from that domain, a
  * real boutique and a dropship front alike. The same is true of every bulk
  * email service, which is most of the ones a small merchant uses.
@@ -301,7 +301,7 @@ const SHARED_SENDERS = [
   "exacttarget.com",
   "mktomail.com",
   "incentivio.com",
-  "chowlyinc.com",
+  "ordermillinc.com",
   "toasttab.com",
   "squareup.com",
 ];
@@ -326,7 +326,7 @@ export function isSharedSender(author: string | null): boolean {
 /**
  * A merchant name that is not a merchant name.
  *
- * Real output: `pgatoursuperstore@mail.pgatour` (an email address),
+ * Real output: `fairwaysupply@mail.pgatour` (an email address),
  * `ParkMobile, LLC All Rights Res` (a footer), `Microsoft Corporatio...` (a
  * truncation marker). A small model reading a receipt will grab whatever looks
  * like a title, and a spending report is only as legible as the names in it.

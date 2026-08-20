@@ -709,9 +709,9 @@ export const MIGRATIONS: readonly string[] = [
   // rebuilt to admit a phone kind, which is why this migration copies the table.
   //
   // **Nicknames are search, not identity, and the distinction is load-bearing.**
-  // A card says Isabella Forté; the user types "issy". Deriving that is useful
+  // A card says Esperanza Duprée; the user types "essy". Deriving that is useful
   // and it is also guesswork, so derived names live in their own table with no
-  // uniqueness: two people may both plausibly be "issy", and an identifier row
+  // uniqueness: two people may both plausibly be "essy", and an identifier row
   // could not represent that without one of them silently swallowing the other.
   // Aliases widen lookup and never merge anything.
   `
@@ -1094,7 +1094,7 @@ export const MIGRATIONS: readonly string[] = [
   //
   // The commitment layer met a real reminder list and the result was a digest
   // that would have spent its entire budget telling somebody rent was due in
-  // November, December, January, and February.
+  // November, smartmber, January, and February.
   //
   // A recurring reminder is one intention with a schedule, not four
   // obligations. Harbor was treating every instance as its own commitment, so
@@ -1413,7 +1413,7 @@ export const MIGRATIONS: readonly string[] = [
   // retitled the episodes that already had it, and episodes are only rewritten
   // when they are pending. So a real store still shows:
   //
-  //   +16103080665 (8 messages) (8 messages)
+  //   +15550100004 (8 messages) (8 messages)
   //
   // where the surface added its own on top of the stored one.
   //
@@ -1421,7 +1421,7 @@ export const MIGRATIONS: readonly string[] = [
   // decides whether a title is a bare phone number, and a phone number with a
   // parenthetical stuck on the end does not look like one. So stale episodes win
   // the naming contest in `titleFor` over genuine subject lines, which is how a
-  // situation ends up titled "+15164594704, +12016005231, +19258959859, ...".
+  // situation ends up titled "+15550100003, +15550100001, +15550100007, ...".
   //
   // `instr` finds the first ' (', which strips both copies in one pass. Episode
   // titles are participant lists joined with ", " and never legitimately contain

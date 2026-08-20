@@ -80,6 +80,49 @@ export interface PurchaseCandidateInput {
   readonly attachmentText: string | null;
 }
 
+/**
+ * Why the predicate said no.
+ *
+ * The four gates below are sequential and each returns the same `false`, so a
+ * mailbox producing zero receipts is indistinguishable from one producing zero
+ * for a completely different reason. On a real store this mattered: the
+ * purchases projection sat empty for weeks while a scheduled `extract` ran
+ * nightly and reported success, and nothing anywhere said which gate was
+ * eating everything.
+ */
+export type RejectionReason =
+  | "empty"
+  | "marketing"
+  | "untrusted_sender"
+  | "no_receipt_words"
+  | "no_money";
+
+export function purchaseRejection(input: PurchaseCandidateInput): RejectionReason | null {
+  const text = `${input.title ?? ""}\n${input.body ?? ""}\n${input.attachmentText ?? ""}`;
+
+  if (text.trim().length === 0) {
+    return "empty";
+  }
+
+  if (NOT_A_RECEIPT.test(text)) {
+    return "marketing";
+  }
+
+  if (!trustSender(input.author).trusted) {
+    return "untrusted_sender";
+  }
+
+  if (!RECEIPT_WORDS.test(text)) {
+    return "no_receipt_words";
+  }
+
+  if (!MONEY.test(text)) {
+    return "no_money";
+  }
+
+  return null;
+}
+
 export function looksLikePurchase(input: PurchaseCandidateInput): boolean {
   const text = `${input.title ?? ""}\n${input.body ?? ""}\n${input.attachmentText ?? ""}`;
 

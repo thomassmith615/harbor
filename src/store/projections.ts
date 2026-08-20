@@ -247,7 +247,7 @@ export interface SpendRow {
 /**
  * The same purchase, arriving twice.
  *
- * An order confirmation and then a receipt with tax: PGA TOUR Superstore,
+ * An order confirmation and then a receipt with tax: Fairway Supply,
  * "LM1 Launch Monitor", $199.99 at midnight and $211.99 at nine the next
  * morning. Two emails, one launch monitor, and a spending report that says you
  * bought two.

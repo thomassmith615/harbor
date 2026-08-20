@@ -173,8 +173,8 @@ build stayed green. The test failing is the only reason I noticed.
 
 I fixed this in M13 and fixed the wrong thing. Handle resolution was written for
 situation titles and stayed private to that file, so `harbor situations` printed
-"Isabella Forté" while the layer a person actually reads printed
-`+13392047146`. Harbor had 1,403 resolved people and 2,763 identifiers and the
+"Esperanza Duprée" while the layer a person actually reads printed
+`+15550100002`. Harbor had 1,403 resolved people and 2,763 identifiers and the
 code that knew the answer was never called.
 
 Moved into the entity store, where any layer can reach it, and applied to the

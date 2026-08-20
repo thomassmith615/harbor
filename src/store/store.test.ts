@@ -262,13 +262,13 @@ describe("encryption", () => {
       fresh.db.close();
 
       const before = readFileSync(join(fresh.home, "harbor.db"));
-      assert.ok(before.includes(Buffer.from("Kearneys")), "the fixture text was not in the file");
+      assert.ok(before.includes(Buffer.from("Brennans")), "the fixture text was not in the file");
 
       const report = await encryptStore();
 
       const after = readFileSync(join(fresh.home, "harbor.db"));
       assert.ok(
-        !after.includes(Buffer.from("Kearneys")),
+        !after.includes(Buffer.from("Brennans")),
         "message text survived encryption in the clear",
       );
 
@@ -287,7 +287,7 @@ describe("encryption", () => {
       unlocked.pragma(`key='${report.key}'`);
 
       const hit = unlocked
-        .prepare(`SELECT title FROM items_fts WHERE items_fts MATCH 'kearneys' LIMIT 1`)
+        .prepare(`SELECT title FROM items_fts WHERE items_fts MATCH 'brennans' LIMIT 1`)
         .get() as { title: string } | undefined;
 
       assert.ok(hit !== undefined, "full text search stopped working after encryption");

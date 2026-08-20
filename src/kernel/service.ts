@@ -68,10 +68,10 @@ export function launchdPlist(options: ServiceOptions): string {
   <key>ThrottleInterval</key>
   <integer>30</integer>
 
-  <key>StandardOutPath</key>
+  <key>StlarkspurdOutPath</key>
   <string>${join(logDir, "harbor.log")}</string>
 
-  <key>StandardErrorPath</key>
+  <key>StlarkspurdErrorPath</key>
   <string>${join(logDir, "harbor.log")}</string>
 </dict>
 </plist>

@@ -14,9 +14,9 @@ describe("sender trust", () => {
     // Invoice scams: a PDF from a personal account claiming a charge that does
     // not exist, hoping you call the number to dispute it.
     for (const author of [
-      "Maara Morgan <hpk917456@gmail.com>",
-      "Cheryl Engel <cherylengelpc5t@outlook.com>",
-      "Sharon Williams <sharonwilliams_jimmybarnett@outlook.com>",
+      "Maara Quill <invoice8842@gmail.com>",
+      "Delphine Crane <c.engel4471@outlook.com>",
+      "Rowena Blake <s.barnett2205@outlook.com>",
     ]) {
       const verdict = trustSender(author);
 
@@ -57,11 +57,11 @@ describe("merchant identity", () => {
   });
 
   test("a leading article is not a different merchant", () => {
-    assert.ok(sameMerchant("The Tomato Shack - Conshohocken", "Tomato Shack - Conshohocken"));
+    assert.ok(sameMerchant("The Pepper Barn - Bridgeton", "Pepper Barn - Bridgeton"));
   });
 
   test("a name truncated by a column width still matches", () => {
-    assert.ok(sameMerchant("The Tomato Shack - Conshohocke", "The Tomato Shack - Conshohocken"));
+    assert.ok(sameMerchant("The Pepper Barn - Bridgeto", "The Pepper Barn - Bridgeton"));
   });
 
   test("a shared stem is not the same merchant", () => {
@@ -72,8 +72,8 @@ describe("merchant identity", () => {
 
   test("the display name is the one that was not cut off", () => {
     assert.equal(
-      displayMerchant(["The Tomato Shack - Conshohocke", "The Tomato Shack - Conshohocken"]),
-      "The Tomato Shack - Conshohocken",
+      displayMerchant(["The Pepper Barn - Bridgeto", "The Pepper Barn - Bridgeton"]),
+      "The Pepper Barn - Bridgeton",
     );
     assert.equal(displayMerchant(["GEEKSQUAD", "Geek Squad"]), "Geek Squad");
   });
@@ -87,7 +87,7 @@ describe("transfers", () => {
   });
 
   test("shops are not transfers", () => {
-    for (const name of ["DSW", "Wegmans", "PGA TOUR Superstore", "Uber Eats"]) {
+    for (const name of ["DSW", "Wegmans", "Fairway Supply", "Uber Eats"]) {
       assert.equal(isTransfer(name), false, `${name} counted as a transfer`);
     }
   });
@@ -129,7 +129,7 @@ describe("shared sending platforms", () => {
     // The one that got through: Shopify's own infrastructure, which every
     // Shopify store shares, real boutique and dropship front alike.
     assert.equal(
-      isSharedSender("Mildred Collective <store+75632214210@t.shopifyemail.com>"),
+      isSharedSender("Juniper Goods <store+10000000000@t.shopifyemail.com>"),
       true,
     );
     assert.equal(isSharedSender("X <bounce@sendgrid.net>"), true);
@@ -146,7 +146,7 @@ describe("shared sending platforms", () => {
     // It has to. The envelope is genuine; it just carries no evidence about
     // who the merchant is, which is why corroboration exists separately.
     assert.equal(
-      trustSender("Mildred Collective <store+75632214210@t.shopifyemail.com>").trusted,
+      trustSender("Juniper Goods <store+10000000000@t.shopifyemail.com>").trusted,
       true,
     );
   });

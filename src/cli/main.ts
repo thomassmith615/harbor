@@ -35,7 +35,7 @@ import { searchEpisodes } from "../retrieval/episodes.js";
 import { segmentEpisodes } from "../derive/episodes.js";
 import { buildCommitments, intentCandidates } from "../derive/commitments.js";
 import { latestDigest, produceDigest, recentDigests } from "../derive/digest.js";
-import { extractPurchases, purchaseCandidates } from "../derive/extract.js";
+import { extractPurchases, purchaseCandidates, purchaseFunnel } from "../derive/extract.js";
 import { attachmentSummary, attachmentsFor } from "../store/attachments.js";
 import {
   countProjections,
@@ -1309,6 +1309,38 @@ async function main(): Promise<number> {
         // that is mostly marketing, this is the difference between reading two
         // hundred items and reading thirty thousand.
         if (options.dryRun === true) {
+          // The funnel first, because "0 items look like receipts" is not an
+          // answer, it is five different answers wearing the same words.
+          const funnel = purchaseFunnel(db);
+
+          logger.print(`Mail items         ${String(funnel.mailItems)}`);
+          logger.print(`  not yet judged   ${String(funnel.unjudged)}`);
+          logger.print(`  inspected now    ${String(funnel.inspected)}`);
+          logger.print(`  with attachment text ${String(funnel.withAttachmentText)}`);
+          logger.print(`  look like receipts   ${String(funnel.passed)}`);
+
+          const reasons = Object.entries(funnel.rejected).sort((a, b) => b[1] - a[1]);
+
+          if (reasons.length > 0) {
+            logger.print("");
+            logger.print("Rejected because:");
+
+            for (const [reason, count] of reasons) {
+              logger.print(`  ${reason.padEnd(20)} ${String(count)}`);
+            }
+          }
+
+          if (funnel.topUntrustedSenders.length > 0) {
+            logger.print("");
+            logger.print("Senders rejected as untrusted (a real merchant here is the bug):");
+
+            for (const entry of funnel.topUntrustedSenders) {
+              logger.print(`  ${String(entry.count).padStart(5)}  ${entry.sender}`);
+            }
+          }
+
+          logger.print("");
+
           const candidates = purchaseCandidates(db, budget);
 
           logger.print(`${String(candidates.length)} items look like receipts:`);
@@ -1337,6 +1369,13 @@ async function main(): Promise<number> {
         logger.print(`Read           ${String(report.read)}`);
         logger.print(`Purchases      ${String(report.written)}`);
         logger.print(`Not purchases  ${String(report.notPurchases)} (read, and correctly declined)`);
+
+        if (report.escalated > 0) {
+          logger.print(
+            `Escalated      ${String(report.escalated)} retried one tier up, ` +
+              `${String(report.rescued)} rescued`,
+          );
+        }
 
         if (report.rejected.length > 0) {
           logger.print(`Rejected       ${String(report.rejected.length)} that failed verification`);

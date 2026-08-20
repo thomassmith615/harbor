@@ -514,7 +514,7 @@ function describeCoverage(db: DB, context: ToolContext): Record<string, unknown>
  *
  * Stored transcripts say "Me:", which is unambiguous in a file and not in a
  * tool result: "me" is whoever happens to be speaking. A model reading a
- * conversation whose `with` field says "Isabella Forté" reasonably reads the
+ * conversation whose `with` field says "Esperanza Duprée" reasonably reads the
  * whole thing as hers, which is how Harbor came to believe the user was going
  * on a beach weekend with someone he had merely told about a hot tub.
  */

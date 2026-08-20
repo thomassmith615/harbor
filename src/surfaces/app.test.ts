@@ -43,7 +43,7 @@ describe("rendering an answer", () => {
   });
 
   test("lists become lists", () => {
-    const html = markdown("- **The Daisy Tavern**: $28.01\n- Philly Pretzel Factory");
+    const html = markdown("- **The Bellhouse Tavern**: $28.01\n- Philly Pretzel Factory");
 
     assert.ok(html.includes("<ul>"), "a bulleted answer did not become a list");
     assert.equal((html.match(/<li>/g) ?? []).length, 2);
