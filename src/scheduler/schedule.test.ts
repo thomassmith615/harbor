@@ -24,6 +24,30 @@ import { DEFAULT_PRINCIPAL } from "../store/schema.js";
 
 const TZ = "America/New_York";
 
+/**
+ * The wall-clock time a timestamp lands on, in the schedule's own zone.
+ *
+ * Both advancement tests used to assert that the next run was more than an hour
+ * away, which is true for a daily slot twenty-three hours a day and false for
+ * the hour before it. The digest test failed between 06:00 and 07:00 Eastern
+ * and the extract test between 03:30 and 04:30, so both passed in CI, passed
+ * all day, and failed for whoever happened to run them early. A test that fails
+ * for one hour a day is worse than one that always fails, because the first
+ * time you see it you assume it is the change you just made.
+ *
+ * The clock arithmetic was standing in for the real claim, which is that the
+ * task advanced to its own next slot. That is what these check now, and it is
+ * true at every hour of the day.
+ */
+function localTime(ms: number): string {
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: TZ,
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(new Date(ms));
+}
+
 function only(store: TestStore) {
   const found = listSchedules(store.db)[0];
 
@@ -116,9 +140,10 @@ test("a refused schedule", async (t) => {
 
       const after = only(store);
 
-      assert.ok(after.nextRunAt !== null);
-      assert.ok(
-        after.nextRunAt - Date.now() > 3_600_000,
+      assert.ok(after.nextRunAt !== null && after.nextRunAt > Date.now());
+      assert.equal(
+        localTime(after.nextRunAt),
+        "04:30",
         "a long-refused task should wait for its natural next slot",
       );
     } finally {
@@ -144,7 +169,8 @@ test("a refused schedule", async (t) => {
 
       assert.ok(after.lastRunAt !== null);
       assert.equal(after.lastStatus, "ok");
-      assert.ok(after.nextRunAt !== null && after.nextRunAt - Date.now() > 3_600_000);
+      assert.ok(after.nextRunAt !== null && after.nextRunAt > Date.now());
+      assert.equal(localTime(after.nextRunAt), "07:00", "advanced to something other than its slot");
     } finally {
       store.close();
     }

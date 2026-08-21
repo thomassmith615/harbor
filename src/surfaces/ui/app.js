@@ -189,6 +189,19 @@ function ago(at) {
   return Math.round(seconds / 86400) + "d ago";
 }
 
+function duration(seconds) {
+  if (!seconds && seconds !== 0) return "";
+
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.floor((seconds % 86400) / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+
+  if (days > 0) return days + "d " + hours + "h";
+  if (hours > 0) return hours + "h " + minutes + "m";
+
+  return minutes + "m";
+}
+
 function count(n) {
   return Number(n ?? 0).toLocaleString();
 }
@@ -389,6 +402,10 @@ $("health").addEventListener("click", () => { switchTo("run"); });
 
 /** Freshness of one source, which is what its lamp colour means. */
 function lampState(source, running) {
+  // Set aside before anything else. A source nothing can fetch must never go
+  // amber or red: those colours mean "you can fix this", and there is nothing
+  // to fix.
+  if (source.dormant) return "dormant";
   if (running) return "syncing";
   if (source.streams.length === 0) return "never";
 
@@ -449,6 +466,14 @@ function switchTo(next) {
   $("composer").hidden = next !== "chat";
 
   renderView();
+
+  // Coming back to a conversation in progress and being thrown to the top of
+  // it is the same complaint as the jumping, one tab across.
+  if (next === "chat" && lastTurn() !== null) {
+    requestAnimationFrame(pinLastTurn);
+    return;
+  }
+
   window.scrollTo({ top: 0 });
 }
 
@@ -559,6 +584,18 @@ function sourceCard(source) {
   head.append(el("span", "card-note", count(source.items) + " items"));
   card.append(head);
 
+  if (source.dormant) {
+    card.append(
+      el(
+        "p",
+        "card-sub",
+        "Set aside. No connector in this build can fetch it, so these items are " +
+          "kept as they are and never update. They are still searchable and " +
+          "Harbor still reasons over them.",
+      ),
+    );
+  }
+
   const rows = el("div", "rows");
 
   for (const stream of source.streams) {
@@ -566,9 +603,19 @@ function sourceCard(source) {
     row.append(el("span", "row-name", stream.connector));
 
     const meta = el("span", "row-meta");
-    meta.textContent = stream.lastSyncAt
-      ? "synced " + ago(stream.lastSyncAt) + (stream.historicalDone ? "" : ", filling in")
-      : "not synced yet";
+
+    if (!stream.syncable) {
+      // Not "synced 9 days ago". That reads as a problem, and the number would
+      // grow forever.
+      meta.textContent = "frozen";
+      meta.style.color = "var(--faint)";
+    } else if (stream.lastSyncAt) {
+      meta.textContent =
+        "synced " + ago(stream.lastSyncAt) + (stream.historicalDone ? "" : ", filling in");
+    } else {
+      meta.textContent = "not synced yet";
+    }
+
     row.append(meta);
     rows.append(row);
   }
@@ -619,6 +666,29 @@ function renderRun() {
   const jobs = overview?.jobs ?? [];
   const availability = overview?.availability ?? [];
   const problems = overview?.problems ?? [];
+
+  // "Is Harbor running" is not the same question as "did that request
+  // succeed". A daemon crash-looping under launchd answers every request it
+  // is up for, and the only tell is that it has been up for forty seconds.
+  const card = el("div", "card");
+  const head = el("div", "card-head");
+  head.append(el("h3", "card-title", reachable ? "Running" : "Not answering"));
+  head.append(el("span", "card-note", overview?.version ? "v" + overview.version : ""));
+  card.append(head);
+  card.append(
+    el(
+      "p",
+      "card-sub",
+      reachable
+        ? "up " +
+          duration(overview?.uptimeSeconds) +
+          ", holding " +
+          count(overview?.items ?? 0) +
+          " items"
+        : "The daemon is not answering. On the Mac: tail -f ~/.harbor/logs/harbor.log",
+    ),
+  );
+  stage.append(card);
 
   stage.append(el("div", "section-title", "Operations"));
 
@@ -958,6 +1028,84 @@ function openConnect(sourceType) {
 
 /* ---------- chat ---------- */
 
+/**
+ * Scrolling, which is a thing to get right rather than a thing to call
+ * scrollIntoView about.
+ *
+ * The old page scrolled the answer bubble into view on every streamed event.
+ * That reads as jumping, and it has three separate causes: the bubble changes
+ * height as "Thinking" becomes "Reading conversation" becomes the answer, the
+ * page is shorter than the viewport early in a turn so the browser clamps the
+ * scroll somewhere arbitrary, and on iOS `scrollIntoView` measures the layout
+ * viewport while the keyboard has moved the visual one.
+ *
+ * The model here scrolls exactly once per turn: when you send a question, it
+ * goes to the top of the screen and stays there while the answer fills in
+ * underneath. Nothing moves after that, because #tail shrinks by however much
+ * the answer grows and the page height never changes.
+ */
+function chatMetrics() {
+  const top = $("topbar").offsetHeight;
+  // The composer's own padding already reserves the tab bar underneath it, so
+  // its height is the whole obstructed strip at the bottom.
+  const composer = $("composer").offsetHeight;
+
+  return { top, composer, available: window.innerHeight - top - composer };
+}
+
+/** The question and answer of the turn in progress, or null. */
+function lastTurn() {
+  const answer = $("thread").lastElementChild;
+  const question = answer === null ? null : answer.previousElementSibling;
+
+  if (question === null || !question.classList.contains("msg-you")) {
+    return null;
+  }
+
+  return { question, answer };
+}
+
+function fitTail() {
+  const tail = $("tail");
+  const { composer, available } = chatMetrics();
+
+  // Never less than the strip the composer covers, or the last line of a long
+  // answer sits underneath it.
+  const floor = composer + 16;
+  const turn = lastTurn();
+
+  if (turn === null) {
+    tail.style.height = $("thread").childElementCount > 0 ? floor + "px" : "0px";
+    return;
+  }
+
+  const used =
+    turn.question.getBoundingClientRect().height +
+    turn.answer.getBoundingClientRect().height +
+    24;
+
+  tail.style.height = Math.max(floor, available - used) + "px";
+}
+
+function pinLastTurn() {
+  const turn = lastTurn();
+
+  if (turn === null) {
+    return;
+  }
+
+  const { top } = chatMetrics();
+  const y = turn.question.getBoundingClientRect().top + window.scrollY - top - 10;
+
+  // Instant, not smooth. A smooth scroll still running when the first tool
+  // event resizes the page is the jump this whole function exists to remove.
+  window.scrollTo({ top: Math.max(0, y), behavior: "auto" });
+}
+
+window.addEventListener("resize", () => {
+  if (view === "chat") fitTail();
+});
+
 const OPENERS = [
   "What is going on this week across everything?",
   "What have I said I would do and not done?",
@@ -967,6 +1115,8 @@ const OPENERS = [
 function renderOpener() {
   const opener = $("opener");
   opener.hidden = $("thread").childElementCount > 0;
+
+  fitTail();
 
   const chips = $("openerChips");
 
@@ -1015,7 +1165,13 @@ $("composer").addEventListener("submit", async (event) => {
 
   const answer = bubble("msg-harbor");
   working(answer, null);
-  answer.scrollIntoView({ block: "end" });
+
+  // After layout, not during it: the bubbles were appended this tick and their
+  // heights are not measurable until the browser has laid them out.
+  requestAnimationFrame(() => {
+    fitTail();
+    pinLastTurn();
+  });
 
   try {
     await streamAsk(question, answer);
@@ -1026,7 +1182,7 @@ $("composer").addEventListener("submit", async (event) => {
     asking = false;
     $("send").disabled = false;
     $("composerStatus").hidden = true;
-    answer.scrollIntoView({ block: "end" });
+    requestAnimationFrame(fitTail);
   }
 });
 
@@ -1091,7 +1247,7 @@ async function streamAsk(question, node) {
         working(node, payload.name);
         $("composerStatus").textContent = payload.name;
         $("composerStatus").hidden = false;
-        node.scrollIntoView({ block: "end" });
+        fitTail();
       }
 
       if (name === "answer") {
@@ -1113,6 +1269,10 @@ async function streamAsk(question, node) {
         }
 
         if (meta.childElementCount > 0) node.append(meta);
+
+        // The spacer gives back exactly what the answer took, so the page is
+        // the same height it was a moment ago and nothing moves under you.
+        requestAnimationFrame(fitTail);
       }
 
       if (name === "error") {

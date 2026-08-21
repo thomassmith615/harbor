@@ -29,7 +29,7 @@
 
 <div class="shell" id="shell" hidden>
 
-  <header class="topbar">
+  <header class="topbar" id="topbar">
     <div class="brand">
       <span class="brand-mark" aria-hidden="true"></span>
       <span class="brand-name">Harbor</span>
@@ -53,6 +53,10 @@
         <p class="opener-lede">Ask across everything at once. Harbor answers from your messages, mail, calendars and reminders together.</p>
         <div class="opener-chips" id="openerChips"></div>
       </div>
+      <!-- Sized in script. Holds the page tall enough that the question you
+           just asked can sit at the top while the answer grows underneath it,
+           without the page height changing as it does. -->
+      <div class="tail" id="tail"></div>
     </section>
 
     <section class="view" id="viewSources" hidden></section>

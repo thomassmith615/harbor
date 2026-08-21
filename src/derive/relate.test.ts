@@ -2,7 +2,7 @@
  * The relationship layer, pinned.
  *
  * Every assertion here corresponds to something that was actually wrong, or to
- * something that would be wrong silently if it broke. That is the stlarkspurd for
+ * something that would be wrong silently if it broke. That is the standard for
  * adding a test to this file: not coverage, but "if this regressed, how long
  * would it take anybody to notice". The answer for most of the graph is weeks,
  * because a missing edge looks exactly like a question Harbor could not answer.

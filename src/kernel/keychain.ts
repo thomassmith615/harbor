@@ -53,9 +53,9 @@ const REFERENCE_PREFIX = "keychain:";
  */
 export function keychainService(): string {
   const home = harborHome();
-  const stlarkspurd = join(homedir(), ".harbor");
+  const standard = join(homedir(), ".harbor");
 
-  if (home === stlarkspurd) {
+  if (home === standard) {
     return "harbor";
   }
 

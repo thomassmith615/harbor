@@ -12,9 +12,8 @@ Everything derived is rebuildable from what was fetched. Every claim carries the
 evidence it was built from. Nothing leaves this machine except through one gate,
 and that gate is audited.
 
-Running against a real store: ~41,000 items across five sources, 2,200
-conversations, 1,600 resolved people, and 49 situations that span more than one
-source. Roughly 177 tests.
+Running against a real store: ~42,000 items across five sources, 2,283
+conversations, and 49 situations that span more than one source. 176 tests.
 
 ## What is worth looking at
 
@@ -63,8 +62,10 @@ bug: asked what somebody liked, Harbor answered from things the user had said to
 them. `src/reasoning/tools.ts`.
 
 The comments throughout explain why a thing is the way it is, usually including
-what the previous attempt got wrong. `docs/` holds the milestone notes, which
-are the same thing at a larger scale.
+what the previous attempt got wrong. That is deliberate and it is where the
+reasoning lives: there is no separate design document to fall out of date with
+the code, because a comment that contradicts the function under it gets noticed
+and a document that contradicts the system does not.
 
 ## Running it
 
@@ -98,6 +99,35 @@ minute or two; older history fills in behind you. `harbor jobs` says what it is
 doing, `harbor status` says what it holds and how far back.
 
 Requires Node 20.11 or later. `npm install && npm run build`.
+
+## The interface
+
+```
+harbor daemon
+```
+
+Then open `http://127.0.0.1:8484`. It asks to be paired; on the machine running
+Harbor, `harbor device code --act` prints a short-lived single-use code.
+
+Three views. **Ask** is the product, and it streams what it is reading while it
+reads it. **Sources** shows what is connected, when each last synced, and
+connects new ones without a terminal. **Run** has four operations (sync, fill in
+history, rebuild links, back up), what is running now, and what has run recently.
+
+The page is three files in `src/surfaces/ui/`, served by the daemon from the
+same origin as the API. No build step, no bundler, no second repository: one
+`npm run build` produces the daemon and its interface together, which is the
+only arrangement where they cannot be different versions of each other. An
+earlier separate front end fell six milestones behind the API and was shelved.
+
+Operation status lives in SQLite rather than in the page, so a browser refresh
+shows the same running job at the same progress. Chat history does not persist,
+deliberately: conversations are stored server-side and `harbor ask` reads them,
+but a reload starts a fresh thread.
+
+To leave it running and reach it from a phone, see `docs/RUNNING.md`. The short
+version is `harbor install-service` plus Tailscale, which keeps Harbor bound to
+loopback and still gives you a real HTTPS address from anywhere.
 
 ## What it holds
 
@@ -271,11 +301,19 @@ that says only "haha ok" must connect to nothing.
 - Household support is schema, custodian, visibility, and search scoping only.
   Entity resolution, commitments, detectors, and the digest all assume one
   person.
-- `src/cli/main.ts` is still one file of about 3,900 lines. The surface it
+- `src/cli/main.ts` is still one file of about 4,700 lines. The surface it
   registers is now the right shape; the file is not.
-- `harbor auth` is three source-specific flows where it should be one
-  interactive `connect` that detects the platform and offers what is available.
+- `harbor auth` is three source-specific flows on the command line. The web
+  interface does have the single connect flow this gap describes, so the
+  duplication is now the problem rather than the absence.
 - Gmail attachments are referenced but not fetched, and a good share of receipts
   are PDFs.
 - Harbor reads and never writes. Write actions were removed rather than left
   half-finished; if they come back it should be deliberately.
+- A source whose connector no longer exists keeps its items and can never be
+  refreshed. Harbor marks it dormant rather than reporting it as perpetually
+  stale, which is honest but is not the same as being able to clean it up.
+
+## License
+
+MIT. See `LICENSE`.

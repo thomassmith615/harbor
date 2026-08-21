@@ -72,7 +72,7 @@ Respond with JSON only, no prose and no code fences:
  * Categories Harbor will not keep about a person, whatever they say in a chat.
  *
  * A model told not to propose these will mostly comply, and mostly is not a
- * stlarkspurd worth having for this category of information. Checked again here,
+ * standard worth having for this category of information. Checked again here,
  * after the model, because the cost of being wrong is not symmetric with the
  * benefit of being right.
  */

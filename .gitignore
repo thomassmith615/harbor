@@ -4,3 +4,6 @@ dist/
 .env
 .harbor/
 run.sh
+
+# Local working notes about a real store. Never published.
+docs/FIELD-NOTES.md

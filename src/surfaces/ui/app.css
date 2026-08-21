@@ -157,6 +157,10 @@ code {
 .lamp[data-state="syncing"] .lamp-dot { background: var(--accent); animation: breathe 1.9s ease-in-out infinite; }
 .lamp[data-state="stale"] .lamp-dot { background: var(--warn); }
 .lamp[data-state="never"] .lamp-dot { background: var(--faint); }
+/* Set aside on purpose. Hollow rather than coloured: present, accounted for,
+   and making no claim about freshness. */
+.lamp[data-state="dormant"] { opacity: 0.62; }
+.lamp[data-state="dormant"] .lamp-dot { background: transparent; box-shadow: inset 0 0 0 1.5px var(--faint); }
 .lamp[data-state="broken"] .lamp-dot { background: var(--bad); }
 
 /* ---------- stage ---------- */
@@ -164,7 +168,11 @@ code {
 .stage { flex: 1; min-height: 0; }
 .view { padding: 12px 16px 24px; }
 
-#viewChat { padding-bottom: 118px; }
+/* The chat view reserves no bottom padding of its own: #tail does that job,
+   and doing it in two places means they disagree by exactly the amount that
+   makes the composer cover the last line. */
+#viewChat { padding-bottom: 0; }
+.tail { height: 0; }
 
 .section-title {
   font: 11.5px/1 var(--mono); letter-spacing: 0.09em; text-transform: uppercase;

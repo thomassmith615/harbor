@@ -68,10 +68,22 @@ export function launchdPlist(options: ServiceOptions): string {
   <key>ThrottleInterval</key>
   <integer>30</integer>
 
-  <key>StlarkspurdOutPath</key>
+  <!-- Harbor is a background service, not something a person is waiting on.
+       Saying so keeps macOS from treating it as an interactive app, and stops
+       it competing for foreground scheduling on a laptop somebody is using. -->
+  <key>ProcessType</key>
+  <string>Background</string>
+
+  <!-- A run is a sync, a derive pass and possibly an embedding batch. Killing
+       it mid-transaction is the one thing a supervisor must not do to a store
+       that is the whole product. -->
+  <key>ExitTimeOut</key>
+  <integer>60</integer>
+
+  <key>StandardOutPath</key>
   <string>${join(logDir, "harbor.log")}</string>
 
-  <key>StlarkspurdErrorPath</key>
+  <key>StandardErrorPath</key>
   <string>${join(logDir, "harbor.log")}</string>
 </dict>
 </plist>
@@ -115,6 +127,16 @@ export function installInstructions(platform: NodeJS.Platform, path: string): re
       "",
       "Stop it with:",
       "  launchctl unload ~/Library/LaunchAgents/com.harbor.daemon.plist",
+      "",
+      "Two things this cannot do for you:",
+      "",
+      "  A LaunchAgent starts at login, not at boot, and the keychain unlocks",
+      "  at login too. After a restart Harbor is down until somebody logs in.",
+      "  That is the correct trade for a store whose key lives in the keychain.",
+      "",
+      "  macOS sleeps when the lid closes, and power makes no difference.",
+      "  Lid open with `pmset` sleep disabled is the setup that works:",
+      "    sudo pmset -c disablesleep 1     (undo with 0)",
     ];
   }
 

@@ -14,9 +14,9 @@ describe("sender trust", () => {
     // Invoice scams: a PDF from a personal account claiming a charge that does
     // not exist, hoping you call the number to dispute it.
     for (const author of [
-      "Maara Quill <invoice8842@gmail.com>",
-      "Delphine Crane <c.engel4471@outlook.com>",
-      "Rowena Blake <s.barnett2205@outlook.com>",
+      "Maara Quill <example-invoice@gmail.com>",
+      "Delphine Crane <example-billing@outlook.com>",
+      "Rowena Blake <example-accounts@outlook.com>",
     ]) {
       const verdict = trustSender(author);
 

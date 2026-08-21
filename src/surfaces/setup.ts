@@ -12,8 +12,9 @@ import { countSituations } from "../store/relationships.js";
 import { itemsByAccount } from "../store/coverage.js";
 import { listJobs } from "../store/jobs.js";
 import { taskAvailability } from "../jobs/runner.js";
-import { SOURCE_TYPES } from "../connectors/registry.js";
+import { SOURCE_TYPES, connectorById } from "../connectors/registry.js";
 import { available as imessageAvailable } from "../connectors/imessage/messages.js";
+import { packageVersion } from "../kernel/version.js";
 import { countPending, deriveStats } from "../store/chunks.js";
 import { countUnclassified, CLASSIFIER_VERSION } from "../derive/classify.js";
 import { coverageByKind, coverageFor, databaseSize } from "../store/coverage.js";
@@ -182,6 +183,16 @@ export function problems(db: DB, principalId: string): readonly Problem[] {
       continue;
     }
 
+    // A stream whose connector is no longer in the registry cannot be synced by
+    // anything, so "has not synced in 9 days" is a complaint about a state no
+    // button can change. It is a permanent warning that trains you to ignore
+    // the warnings that matter. Its items are still there and still searchable;
+    // they are simply frozen, and the Sources view says so once, in place,
+    // rather than here every day.
+    if (connectorById(stream.connectorId) === null) {
+      continue;
+    }
+
     const age = Date.now() - stream.lastSyncAt;
 
     if (age > 3 * 86_400_000) {
@@ -267,11 +278,15 @@ export interface OverviewSource {
   readonly accountId: string;
   readonly label: string;
   readonly sourceType: string;
+  /** Nothing in this build can sync it. Its items are kept and never change. */
+  readonly dormant: boolean;
   readonly items: number;
   readonly newest: number | null;
   readonly streams: readonly {
     readonly id: string;
     readonly connector: string;
+    /** False when no connector in the registry can ever fetch this again. */
+    readonly syncable: boolean;
     readonly lastSyncAt: number | null;
     readonly recentDone: boolean;
     readonly historicalDone: boolean;
@@ -297,6 +312,13 @@ export function overview(db: DB, principalId: string): Record<string, unknown> {
     accountId: account.id,
     label: account.label,
     sourceType: account.sourceType,
+    // Derived, not configured. There is no "retire this source" setting and
+    // there should not be one: whether Harbor can still fetch a thing is a
+    // fact about the registry, and a flag in the database would be a second
+    // answer to the same question, free to disagree with the first.
+    dormant: streams
+      .filter((stream) => stream.accountId === account.id)
+      .every((stream) => connectorById(stream.connectorId) === null),
     items: counts.get(account.id)?.count ?? 0,
     newest: counts.get(account.id)?.newest ?? null,
     streams: streams
@@ -304,6 +326,7 @@ export function overview(db: DB, principalId: string): Record<string, unknown> {
       .map((stream) => ({
         id: stream.id,
         connector: stream.connectorId,
+        syncable: connectorById(stream.connectorId) !== null,
         lastSyncAt: stream.lastSyncAt,
         recentDone: stream.recentDone,
         historicalDone: stream.historicalDone,
@@ -345,6 +368,13 @@ export function overview(db: DB, principalId: string): Record<string, unknown> {
   return {
     ok: true,
     at: Date.now(),
+    // How long this process has been up, which is the honest answer to "is
+    // Harbor running". A store that answers is not the same claim: the store
+    // answers whether or not the daemon has been restarting in a loop, and a
+    // supervisor that restarts every thirty seconds looks exactly like health
+    // if all you check is that a request succeeded.
+    version: packageVersion(),
+    uptimeSeconds: Math.round(process.uptime()),
     items: coverageFor(db, principalId).items,
     databaseBytes: databaseSize(db),
     people: entities.entities,

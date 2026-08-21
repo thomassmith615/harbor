@@ -52,9 +52,6 @@ import {
 } from "../store/commitments.js";
 import { createLogger } from "../kernel/logger.js";
 import { harborHome, loadEnv } from "../kernel/paths.js";
-import * as nodeFs from "node:fs";
-import * as nodePath from "node:path";
-import * as nodeUrl from "node:url";
 import { backup, encryptedBackup, restoreBackup } from "../kernel/backup.js";
 import { pruneBackups, rotateLogs } from "../kernel/housekeeping.js";
 import { doctor } from "../surfaces/doctor.js";
@@ -144,7 +141,8 @@ import type { JobTask } from "../jobs/runner.js";
 import { serveMcp } from "../surfaces/mcp.js";
 import { listDevices, pairDevice, revokeDevice } from "../store/devices.js";
 import { installInstructions, launchdPlist, systemdUnit } from "../kernel/service.js";
-import { writeFileSync } from "node:fs";
+import { entryPoint, packageVersion } from "../kernel/version.js";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join, resolve as resolvePath } from "node:path";
 import type { ScheduledTask } from "../scheduler/schedule.js";
 import { createEmbedder } from "../derive/embed/index.js";
@@ -560,27 +558,6 @@ function connectMessages(): void {
     logger.print("Next: harbor sync --backfill");
   } finally {
     db.close();
-  }
-}
-
-/**
- * The version in package.json, read at run time.
- *
- * Resolved from this file's own location rather than the working directory, so
- * `harbor` reports the build it is actually running whether it was invoked
- * through `npm link`, a global install, or `node dist/cli/main.js`. The literal
- * that used to be here read 0.17.0 for nine releases, which made the one
- * command a person runs to check what they are running the one command that
- * lied to them.
- */
-function packageVersion(): string {
-  try {
-    const here = nodePath.dirname(nodeUrl.fileURLToPath(import.meta.url));
-    const text = nodeFs.readFileSync(nodePath.join(here, "..", "..", "package.json"), "utf8");
-
-    return (JSON.parse(text) as { version?: string }).version ?? "unknown";
-  } catch {
-    return "unknown";
   }
 }
 
@@ -3573,9 +3550,16 @@ async function main(): Promise<number> {
       );
     });
 
-  dev
+  // Top level, not under `dev`.
+  //
+  // `harbor dev` is for Harbor's internals and says so. Installing the service
+  // is the opposite: it is the one command between "I ran this in a terminal"
+  // and "this is a thing that is running", which is the whole point of an
+  // appliance. Nobody looks for it under a namespace documented as not being
+  // for them.
+  program
     .command("install-service")
-    .description("Write a launchd plist or systemd unit for the daemon")
+    .description("Write a launchd plist or systemd unit so Harbor stays running")
     .option("--port <port>", "HTTP port", "8484")
     .option("--host <host>", "bind address", "127.0.0.1")
     .action(async (options: { port: string; host: string }) => {
@@ -3583,7 +3567,7 @@ async function main(): Promise<number> {
 
       const spec = {
         nodePath: process.execPath,
-        entryPath: join(process.cwd(), "dist", "cli", "main.js"),
+        entryPath: entryPoint(),
         port: Number.isFinite(port) ? port : 8484,
         host: options.host,
         timezone: tz,
@@ -3591,6 +3575,12 @@ async function main(): Promise<number> {
 
       const darwin = process.platform === "darwin";
       const path = join(harborHome(), darwin ? "com.harbor.daemon.plist" : "harbor.service");
+
+      // launchd will not create the directory it is told to log into, and the
+      // failure is silent: the job simply never runs. One mkdir here is the
+      // difference between a service that works and an hour with `launchctl
+      // print`.
+      mkdirSync(join(harborHome(), "logs"), { recursive: true });
 
       writeFileSync(path, darwin ? launchdPlist(spec) : systemdUnit(spec), { mode: 0o644 });
 
