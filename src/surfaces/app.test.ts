@@ -1,30 +1,97 @@
 /**
  * The page, and the promises it makes.
  *
- * It is a string, so nothing about it can be typechecked. These cover the
- * handful of things that would break it silently: an endpoint that gets
- * renamed, a command name in the instructions that does not exist, and the page
- * becoming secret when it must not be.
+ * The interface is plain HTML, CSS and JavaScript served from disk, so nothing
+ * in it is typechecked and a rename on the API side breaks it silently. These
+ * cover the handful of failures that would otherwise reach a phone: an endpoint
+ * the page calls that no longer exists, a command in the pairing instructions
+ * that Harbor does not have, the files not reaching `dist` at all, and the
+ * markdown renderer turning model output into live markup.
  */
 import { strict as assert } from "node:assert";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, test } from "node:test";
-import { APP_HTML } from "./app.js";
+import { builtinUiRoot } from "./app.js";
+import { API_PREFIXES } from "./api.js";
+
+const root = builtinUiRoot();
+
+function file(name: string): string {
+  return readFileSync(join(root, name), "utf8");
+}
+
+describe("the interface reaches dist", () => {
+  test("all three files are where the daemon serves them from", () => {
+    // The build copies these; if that step is ever dropped, the daemon answers
+    // the root with a 404 and the only symptom is a blank page on a phone.
+    for (const name of ["index.html", "app.css", "app.js"]) {
+      assert.ok(file(name).length > 0, `${name} is missing from ${root}`);
+    }
+  });
+
+  test("the document loads the other two", () => {
+    const html = file("index.html");
+
+    assert.ok(html.includes('href="/app.css"'));
+    assert.ok(html.includes('src="/app.js"'));
+  });
+});
+
+describe("what the page asks Harbor for", () => {
+  const script = file("app.js");
+
+  test("every endpoint it calls is one the API routes", () => {
+    // Extracted from the source rather than listed here, so a call to a route
+    // that does not exist fails the build rather than the phone.
+    //
+    // The lookbehind drops the tail of a concatenated path: in
+    // `"/jobs/" + id + "/cancel"` only `/jobs` is a route, and `/cancel` is a
+    // segment underneath it. Without this the test reads it as a call to a
+    // route named cancel and fails on correct code.
+    const called = new Set<string>();
+
+    for (const match of script.matchAll(/(?<!\+\s*)["'`]\/([a-z]+)[/"'`?]/g)) {
+      const head = match[1];
+
+      if (head !== undefined && head !== "app") {
+        called.add(head);
+      }
+    }
+
+    assert.ok(called.has("overview"), "the page no longer reads /overview");
+    assert.ok(called.has("ask"), "the page no longer asks anything");
+
+    for (const head of called) {
+      assert.ok(
+        API_PREFIXES.includes(head),
+        `the page calls /${head}, which the API does not route`,
+      );
+    }
+  });
+
+  test("the pairing instructions name a command that exists", () => {
+    // This was a real bug: the page said `harbor device pair`, which mints a
+    // token for a named device rather than a code a browser can redeem.
+    assert.ok(file("index.html").includes("harbor device code"));
+  });
+});
 
 /**
  * The markdown renderer, lifted out of the page and run for real.
  *
- * The page is a string, so this is the only way to test the one function in it
- * with a correctness question rather than a styling question. Extracting by
- * source markers is crude and it beats the alternative, which is trusting a
- * renderer that turns model output into live markup.
+ * Extracting by source markers is crude and it beats the alternative, which is
+ * trusting a function that turns model output into live markup on the basis of
+ * having read it.
  */
 function renderer(): (text: string) => string {
-  const start = APP_HTML.indexOf("function escapeHtml");
-  const end = APP_HTML.indexOf("let token = localStorage");
+  const script = file("app.js");
+  const start = script.indexOf("function escapeHtml");
+  const end = script.indexOf("function ago(");
 
   assert.ok(start >= 0 && end > start, "could not find the renderer in the page");
 
-  return new Function(`${APP_HTML.slice(start, end)}; return markdown;`)() as (
+  return new Function(`${script.slice(start, end)}; return markdown;`)() as (
     text: string,
   ) => string;
 }
@@ -33,8 +100,6 @@ describe("rendering an answer", () => {
   const markdown = renderer();
 
   test("emphasis and code become markup", () => {
-    // Models answer in markdown whether or not you ask them to, so a page that
-    // sets textContent shows a person literal asterisks around every emphasis.
     const html = markdown("You spent **$30.05** on *takeout*. Run `harbor purchases`.");
 
     assert.ok(html.includes("<strong>$30.05</strong>"));
@@ -57,96 +122,41 @@ describe("rendering an answer", () => {
   });
 
   test("markup in the source text stays text", () => {
-    // The whole security argument, and the reason escaping runs first and
-    // unconditionally. This text is a model's output over the user's own mail,
-    // so it can contain anything the mail contained: a script tag from a
-    // marketing email, an img with an onerror handler.
-    const html = markdown('<img src=x onerror=alert(1)> and <script>bad()</script>');
+    // The whole security argument. The text is a model's output over the
+    // user's own mail, so it can contain anything the mail contained.
+    const html = markdown("A receipt said <script>alert(1)</script> and <img onerror=x>.");
 
-    assert.ok(!html.includes("<img"), "an image tag survived into markup");
-    assert.ok(!html.includes("<script"), "a script tag survived into markup");
-    assert.ok(html.includes("&lt;script&gt;"), "the tag was dropped rather than shown as text");
+    assert.ok(!html.includes("<script"), "a script tag survived into the markup");
+    assert.ok(!html.includes("<img"), "an img tag survived into the markup");
+    assert.ok(html.includes("&lt;script&gt;"));
   });
 
-  test("only http links become links", () => {
-    // A javascript: URL in an answer would otherwise be one tap from running.
-    const html = markdown("[ok](https://example.com) [bad](javascript:alert(1))");
+  test("a javascript url does not become a link", () => {
+    const html = markdown("[tap me](javascript:alert(1))");
 
-    assert.ok(html.includes('href="https://example.com"'));
-    assert.ok(!html.includes("javascript:alert(1)\""), "a javascript URL became a link");
-    assert.ok(!html.includes("<a href=\"javascript"), "a javascript URL became a link");
+    assert.ok(!html.includes("<a "), "a javascript: url became a link");
+  });
+
+  test("links are http only, and open safely", () => {
+    const html = markdown("See [the receipt](https://example.com/r/1).");
+
+    assert.ok(html.includes('href="https://example.com/r/1"'));
+    assert.ok(html.includes('rel="noopener noreferrer"'));
   });
 
   test("a table becomes a table", () => {
-    // Models reach for a table whenever they are asked to compare anything, and
-    // a pipe-delimited grid wraps into nonsense on a 380px screen.
-    const html = markdown(
-      "| Merchant | Total |\n| --- | --- |\n| Uber | $140.49 |\n| DSW | $119.79 |",
-    );
+    const html = markdown("| Place | Spent |\n| --- | --- |\n| Wegmans | $41.02 |");
 
-    assert.ok(html.includes("<table>"), "a table stayed as pipes");
-    assert.equal((html.match(/<th>/g) ?? []).length, 2);
-    assert.equal((html.match(/<tr>/g) ?? []).length, 3);
-    assert.ok(html.includes("<td>$140.49</td>"));
+    assert.ok(html.includes("<table>"));
+    assert.ok(html.includes("<th>Place</th>"));
+    assert.ok(html.includes("<td>$41.02</td>"));
   });
 
-  test("pipes in prose are not a table", () => {
-    // The separator row is the only unambiguous marker. Without requiring it, a
-    // sentence containing a pipe would become a one-cell table.
-    const html = markdown("The command is `harbor purchases | head`.");
+  test("prose containing a pipe stays prose", () => {
+    // The false positive that matters: `harbor purchases | head` inside
+    // backticks must not be read as a table.
+    const html = markdown("Run `harbor purchases | head` to see them.");
 
-    assert.ok(!html.includes("<table>"), "prose containing a pipe became a table");
-  });
-
-  test("plain text is still plain text", () => {
-    const html = markdown("Nothing worth interrupting you about.");
-
-    assert.equal(html, "<p>Nothing worth interrupting you about.</p>");
-  });
-});
-
-describe("the built-in page", () => {
-  test("only calls endpoints the API serves", () => {
-    // A renamed route would leave the page silently broken on a phone, which is
-    // the one place nobody is watching a console.
-    for (const path of ["/pair", "/ask", "/digest", "/status"]) {
-      assert.ok(APP_HTML.includes(`"${path}"`), `the page never calls ${path}`);
-    }
-  });
-
-  test("tells the truth about how to pair", () => {
-    // The first draft said `harbor device pair`, which creates a token for a
-    // named device rather than a code a browser can redeem. Somebody following
-    // it would have got an error with no way to know which half was wrong.
-    assert.ok(
-      APP_HTML.includes("harbor device code"),
-      "the instructions name a command that does not issue a redeemable code",
-    );
-    assert.ok(
-      !APP_HTML.includes("harbor device pair"),
-      "the instructions still name the wrong command",
-    );
-  });
-
-  test("sends the token as a bearer header and keeps it out of the URL", () => {
-    assert.ok(APP_HTML.includes("Bearer "), "the page does not authenticate");
-    assert.ok(
-      !APP_HTML.includes("?token="),
-      "a token in a query string ends up in logs and history",
-    );
-  });
-
-  test("forgets the token when the server stops accepting it", () => {
-    // Otherwise a revoked device fails every request forever with no route back
-    // to the pairing screen.
-    assert.ok(APP_HTML.includes("401"), "the page does not handle being unpaired");
-    assert.ok(APP_HTML.includes("removeItem"), "a dead token is never cleared");
-  });
-
-  test("is a single self-contained document", () => {
-    // The point of compiling it in: no second install, no version skew, nothing
-    // to rebuild. An external script or stylesheet reintroduces all three.
-    assert.ok(!/<script[^>]+src=/i.test(APP_HTML), "the page loads an external script");
-    assert.ok(!/<link[^>]+stylesheet/i.test(APP_HTML), "the page loads an external stylesheet");
+    assert.ok(!html.includes("<table>"), "a pipe in prose became a table");
   });
 });

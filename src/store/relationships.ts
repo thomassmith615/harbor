@@ -674,6 +674,24 @@ export function countThreads(db: DB): number {
   return (db.prepare(`SELECT COUNT(*) AS n FROM threads`).get() as { n: number }).n;
 }
 
+/**
+ * Open situations that span more than one source.
+ *
+ * The headline number, and the only one worth putting on a status screen: a
+ * count of every thread includes the single-source ones, which are just
+ * conversations and which Messages already shows better than Harbor would.
+ */
+export function countSituations(db: DB, principalId: string): number {
+  return (
+    db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM threads
+         WHERE principal_id = ? AND source_count >= 2 AND state = 'open'`,
+      )
+      .get(principalId) as { n: number }
+  ).n;
+}
+
 // ---- pending work ----
 
 const CONVERSATIONAL_LIST = CONVERSATIONAL_CONNECTORS.map((id) => `'${id}'`).join(", ");

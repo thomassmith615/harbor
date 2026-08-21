@@ -8,6 +8,12 @@
  * why they are computed here rather than assembled ad hoc per endpoint.
  */
 import { countPendingResolution, entityStats } from "../store/entities.js";
+import { countSituations } from "../store/relationships.js";
+import { itemsByAccount } from "../store/coverage.js";
+import { listJobs } from "../store/jobs.js";
+import { taskAvailability } from "../jobs/runner.js";
+import { SOURCE_TYPES } from "../connectors/registry.js";
+import { available as imessageAvailable } from "../connectors/imessage/messages.js";
 import { countPending, deriveStats } from "../store/chunks.js";
 import { countUnclassified, CLASSIFIER_VERSION } from "../derive/classify.js";
 import { coverageByKind, coverageFor, databaseSize } from "../store/coverage.js";
@@ -243,5 +249,112 @@ export function systemStatus(db: DB, principalId: string): SystemStatus {
     pipelineVersion: PIPELINE_VERSION,
     entityVersion: ENTITY_VERSION,
     classifierVersion: CLASSIFIER_VERSION,
+  };
+}
+
+/**
+ * Everything a client needs to draw itself, in one call.
+ *
+ * The page polls, and a poll that fans out into six requests is six chances
+ * for a partial picture: sources from one instant, jobs from another, and a
+ * screen that contradicts itself for a second every time something finishes.
+ * One object, one instant.
+ *
+ * Nothing is computed here. Every field is a function the CLI already calls,
+ * which is the rule that keeps a third surface cheap.
+ */
+export interface OverviewSource {
+  readonly accountId: string;
+  readonly label: string;
+  readonly sourceType: string;
+  readonly items: number;
+  readonly newest: number | null;
+  readonly streams: readonly {
+    readonly id: string;
+    readonly connector: string;
+    readonly lastSyncAt: number | null;
+    readonly recentDone: boolean;
+    readonly historicalDone: boolean;
+    readonly oldestReached: number | null;
+  }[];
+}
+
+export interface Connectable {
+  readonly sourceType: string;
+  readonly connected: boolean;
+  /** More than one account of this type is normal. */
+  readonly multiple: boolean;
+  readonly available: boolean;
+  readonly reason: string;
+}
+
+export function overview(db: DB, principalId: string): Record<string, unknown> {
+  const accounts = listAccounts(db);
+  const streams = listStreams(db);
+  const counts = new Map(itemsByAccount(db, principalId).map((row) => [row.accountId, row]));
+
+  const sources: OverviewSource[] = accounts.map((account) => ({
+    accountId: account.id,
+    label: account.label,
+    sourceType: account.sourceType,
+    items: counts.get(account.id)?.count ?? 0,
+    newest: counts.get(account.id)?.newest ?? null,
+    streams: streams
+      .filter((stream) => stream.accountId === account.id)
+      .map((stream) => ({
+        id: stream.id,
+        connector: stream.connectorId,
+        lastSyncAt: stream.lastSyncAt,
+        recentDone: stream.recentDone,
+        historicalDone: stream.historicalDone,
+        oldestReached: stream.oldestReached,
+      })),
+  }));
+
+  const connected = new Set(accounts.map((account) => account.sourceType));
+
+  // Why a source cannot be connected, said in the place the button is, rather
+  // than as a failure after somebody taps it.
+  const connectable: Connectable[] = SOURCE_TYPES.map((sourceType) => {
+    const usable =
+      sourceType === "imessage"
+        ? imessageAvailable()
+        : sourceType === "google"
+          ? (process.env["GOOGLE_CLIENT_ID"] ?? "").length > 0
+          : true;
+
+    const reason =
+      sourceType === "imessage"
+        ? "Only on the Mac holding the messages, and it needs Full Disk Access."
+        : sourceType === "google"
+          ? "Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in ~/.harbor/.env first."
+          : "";
+
+    return {
+      sourceType,
+      connected: connected.has(sourceType),
+      multiple: sourceType === "imap" || sourceType === "google",
+      available: usable,
+      reason,
+    };
+  });
+
+  const jobs = listJobs(db, 14);
+  const entities = entityStats(db);
+
+  return {
+    ok: true,
+    at: Date.now(),
+    items: coverageFor(db, principalId).items,
+    databaseBytes: databaseSize(db),
+    people: entities.entities,
+    situations: countSituations(db, principalId),
+    sources,
+    connectable,
+    jobs,
+    running: jobs.filter((job) => job.state === "running" || job.state === "queued"),
+    availability: taskAvailability(db),
+    problems: problems(db, principalId),
+    setupComplete: setupState(db, principalId).complete,
   };
 }

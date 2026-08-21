@@ -50,6 +50,15 @@ function modulesUnder(directory: string): readonly string[] {
     const path = join(directory, entry.name);
 
     if (entry.isDirectory()) {
+      // Harbor's own interface, which is browser JavaScript rather than a
+      // module of the daemon. It reads localStorage on load and there is no
+      // version of "importing it under Node" that means anything. It is
+      // covered by src/surfaces/app.test.ts instead, which runs the one
+      // function in it that has a correctness question.
+      if (entry.name === "ui") {
+        continue;
+      }
+
       found.push(...modulesUnder(path));
       continue;
     }

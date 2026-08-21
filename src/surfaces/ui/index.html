@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0e1216">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Harbor">
+<meta name="color-scheme" content="dark">
+<title>Harbor</title>
+<link rel="stylesheet" href="/app.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='13' fill='none' stroke='%237aa2c4' stroke-width='3'/><circle cx='16' cy='16' r='4' fill='%237aa2c4'/></svg>">
+</head>
+<body>
+
+<!-- Pairing. The only screen that works without a token, because the whole
+     point is that the browser does not have one yet. -->
+<section class="gate" id="gate" hidden>
+  <div class="gate-inner">
+    <h1 class="gate-title">Harbor</h1>
+    <p class="gate-lede">This browser is not paired yet. On the machine running Harbor, run <code>harbor device code --act</code> and type what it prints.</p>
+    <div class="gate-form">
+      <input id="code" autocapitalize="characters" autocomplete="one-time-code" spellcheck="false" placeholder="XXXX-XXXX" aria-label="Pairing code">
+      <button id="pairGo" type="button">Pair</button>
+    </div>
+    <p class="gate-error" id="gateError" role="alert"></p>
+  </div>
+</section>
+
+<div class="shell" id="shell" hidden>
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <span class="brand-name">Harbor</span>
+    </div>
+    <button class="health" id="health" type="button" aria-live="polite">
+      <span class="health-dot" id="healthDot"></span>
+      <span class="health-text" id="healthText">Checking</span>
+    </button>
+  </header>
+
+  <!-- The signature strip: one lamp per source, on every screen. Colour is
+       freshness, not decoration, and it is the fastest answer to "is Harbor
+       current". -->
+  <div class="lamps" id="lamps" role="list" aria-label="Sources"></div>
+
+  <main class="stage">
+
+    <section class="view" id="viewChat">
+      <div class="thread" id="thread"></div>
+      <div class="opener" id="opener">
+        <p class="opener-lede">Ask across everything at once. Harbor answers from your messages, mail, calendars and reminders together.</p>
+        <div class="opener-chips" id="openerChips"></div>
+      </div>
+    </section>
+
+    <section class="view" id="viewSources" hidden></section>
+
+    <section class="view" id="viewRun" hidden></section>
+
+  </main>
+
+  <form class="composer" id="composer">
+    <div class="composer-status" id="composerStatus" hidden></div>
+    <div class="composer-row">
+      <input id="question" placeholder="Ask Harbor" autocomplete="off" enterkeyhint="send" aria-label="Ask Harbor">
+      <button type="submit" id="send" aria-label="Send">
+        <svg viewBox="0 0 24 24" width="19" height="19" aria-hidden="true"><path d="M4 12h13M12 5l7 7-7 7" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+    </div>
+  </form>
+
+  <nav class="tabs" id="tabs">
+    <button type="button" data-view="chat" aria-selected="true">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 0 1-11.6 7.1L4 20l1-4.2A8 8 0 1 1 20 12Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+      <span>Ask</span>
+    </button>
+    <button type="button" data-view="sources" aria-selected="false">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M4 8h16M4 16h16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+      <span>Sources</span>
+    </button>
+    <button type="button" data-view="run" aria-selected="false">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v8l5 3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="12" r="8.4" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>
+      <span>Run</span>
+    </button>
+  </nav>
+
+</div>
+
+<div class="sheet" id="sheet" hidden>
+  <div class="sheet-scrim" id="sheetScrim"></div>
+  <div class="sheet-card" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
+    <div class="sheet-head">
+      <h2 id="sheetTitle"></h2>
+      <button type="button" id="sheetClose" aria-label="Close">&times;</button>
+    </div>
+    <div class="sheet-body" id="sheetBody"></div>
+  </div>
+</div>
+
+<div class="toast" id="toast" role="status" hidden></div>
+
+<script type="module" src="/app.js"></script>
+</body>
+</html>

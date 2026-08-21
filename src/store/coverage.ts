@@ -114,6 +114,33 @@ export function coverageByKind(db: DB, principal: string): readonly KindCoverage
     .all({ principal }) as KindCoverage[];
 }
 
+export interface AccountCoverage {
+  readonly accountId: string;
+  readonly count: number;
+  readonly newest: number | null;
+}
+
+/**
+ * Items per account.
+ *
+ * The sources screen is a list of accounts, so this is the number it shows.
+ * Deliberately not per connector: items carry an account, not a stream, and
+ * inventing an attribution for the sake of a tidier row would be a number that
+ * looks precise and is not.
+ */
+export function itemsByAccount(db: DB, principal: string): readonly AccountCoverage[] {
+  return db
+    .prepare(
+      `SELECT i.account_id AS accountId, COUNT(*) AS count, MAX(i.occurred_at) AS newest
+       FROM items i
+       JOIN accounts a ON a.id = i.account_id
+       WHERE i.deleted_at IS NULL
+         AND (a.custodian_person_id = @principal OR i.visibility = 'household')
+       GROUP BY i.account_id`,
+    )
+    .all({ principal }) as AccountCoverage[];
+}
+
 export function databaseSize(db: DB): number {
   const page = db.pragma("page_count", { simple: true }) as number;
   const size = db.pragma("page_size", { simple: true }) as number;

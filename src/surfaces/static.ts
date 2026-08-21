@@ -88,12 +88,16 @@ export function serveStatic(
 
   const type = TYPES[extname(file).toLowerCase()] ?? "application/octet-stream";
 
-  // Hashed assets are immutable; the HTML document must never be cached or a
-  // deploy leaves people on the previous app forever.
-  const cache =
-    file === index ? "no-cache" : "public, max-age=31536000, immutable";
-
-  response.writeHead(200, { "content-type": type, "cache-control": cache });
+  // Never cached, deliberately.
+  //
+  // This used to serve non-index files as immutable for a year, which is right
+  // for content-hashed bundles and wrong for everything else. The built-in
+  // interface is `app.js` and `app.css` with no hash in the name, so a year of
+  // immutable caching means a phone that opened Harbor once keeps the old page
+  // after every upgrade, with no way to force it but clearing site data. These
+  // are a few kilobytes over a home network; revalidating them costs nothing
+  // worth the class of bug it removes.
+  response.writeHead(200, { "content-type": type, "cache-control": "no-cache" });
   createReadStream(file).pipe(response);
 
   return { handled: true };
