@@ -122,12 +122,20 @@ import {
   setScheduleEnabled,
   SCHEDULABLE,
 } from "../scheduler/schedule.js";
-import { runTaskDirectly, startScheduler } from "../scheduler/runner.js";
+import { startScheduler } from "../scheduler/runner.js";
 import { startApi } from "../surfaces/api.js";
 import { advertise } from "../surfaces/discovery.js";
 import { currentFingerprint, ensureTls, tlsAvailable } from "../kernel/tls.js";
 import { problems, setupState } from "../surfaces/setup.js";
-import { CONFLICTS, enqueue, JOB_TASKS, stop, stopAll, undeclaredPairs } from "../jobs/runner.js";
+import {
+  CONFLICTS,
+  enqueue,
+  JOB_TASKS,
+  runNow,
+  stop,
+  stopAll,
+  undeclaredPairs,
+} from "../jobs/runner.js";
 import {
   clearHandle,
   delegateJob,
@@ -3344,36 +3352,31 @@ async function main(): Promise<number> {
 
   dev
     .command("run")
-    .argument("<task>", SCHEDULABLE.join(" | "))
-    .description("Run a scheduled task once, right now")
+    .argument("<task>", JOB_TASKS.join(" | "))
+    .description("Run a task here and now, and wait for it")
     .action(async (task: string) => {
-      // Two task vocabularies exist: the scheduler's, and the background job
-      // runner's behind `harbor start`. They overlap enough that picking the
-      // wrong one is easy and the failure used to be a bare "unknown task",
-      // which tells a person nothing about where to look next.
-      if (!SCHEDULABLE.includes(task as ScheduledTask)) {
-        const elsewhere = ["recent", "history", "backfill", "onboard"].includes(task);
-
-        throw new HarborError(`\`harbor dev run\` does not know the task ${task}.`, {
+      // One vocabulary. There used to be two, the scheduler's and the job
+      // runner's, with a hand-written switch covering most of the first and
+      // silently answering "unknown task relate" for the rest.
+      if (!JOB_TASKS.includes(task as JobTask)) {
+        throw new HarborError(`Unknown task: ${task}`, {
           code: "usage.unknown_task",
           exitCode: EXIT_CODES.usage,
-          hint: elsewhere
-            ? `${task} is a background job. Run \`harbor start ${task}\` instead.`
-            : `Scheduled tasks: ${SCHEDULABLE.join(", ")}. ` +
-              `Background jobs run with \`harbor start\`.`,
+          hint: `Known tasks: ${JOB_TASKS.join(", ")}`,
         });
       }
 
       const { db } = openDatabase();
 
       try {
-        const note = await runTaskDirectly(db, task as ScheduledTask, {
-          principalId: DEFAULT_PRINCIPAL,
-          timezone: tz,
-          logger,
-        });
-
-        logger.print(note);
+        // Waits, unlike `harbor start`, which returns a job id. Somebody typing
+        // this is watching for the answer.
+        logger.print(
+          await runNow(db, task as JobTask, {
+            principalId: DEFAULT_PRINCIPAL,
+            timezone: tz,
+          }),
+        );
       } finally {
         db.close();
       }

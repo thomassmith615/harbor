@@ -139,17 +139,39 @@ export function contentTerms(text: string): readonly string[] {
 /**
  * The solo-word bar, as a function of the rarity ceiling.
  *
- * Pure and exported so the mistake that produced it can be pinned by a test
- * without building a forty-thousand-document store: the old value was a
- * hardcoded 3 while the ceiling scaled to 500, which silently required a
- * partner word for anything appearing between 4 and 500 times.
+ * Deliberately unchanged after the "logan" incident, which is worth recording
+ * because tightening this was the obvious fix and it was wrong. "Wildwood"
+ * appears in nineteen things and is a good solo link; "logan" appeared in three
+ * and was a bad one. Frequency cannot separate them, and a bar tight enough to
+ * reject one rejects the other. What separates them is that one is a place and
+ * the other is a person's name, which is a question about the word rather than
+ * about how often it occurs.
+ *
+ * Pure and exported so the bar can be pinned by a test without building a
+ * forty-thousand-document store.
  */
 export function soloCeilingFor(rarityCeiling: number): number {
   return Math.max(3, Math.round(rarityCeiling / 6));
 }
 
+/**
+ * The shortest word allowed to carry an edge by itself.
+ *
+ * A four-character fragment linked a laundry reminder to a restaurant
+ * transaction twenty-five days apart, because a truncated reminder said "dece"
+ * and so did something else. Short strings are rare for uninteresting reasons:
+ * abbreviations, truncations, typos, and codes that mean nothing. Being rare is
+ * the only test they pass, and it is the only test that was being applied.
+ *
+ * Solo evidence only. Two shared short words are still two words.
+ */
+export function longEnoughAlone(word: string): boolean {
+  return word.length >= 6;
+}
+
 export class TermIndex {
   private readonly cache = new Map<string, number>();
+  private names: Set<string> | null = null;
   private readonly ceiling: number;
   private readonly corpus: number;
 
@@ -192,6 +214,52 @@ export class TermIndex {
 
   get rarityCeiling(): number {
     return this.ceiling;
+  }
+
+  /**
+   * Whether a word is somebody's name, according to your own address book.
+   *
+   * The discriminator that frequency could not supply. "Wildwood" appears in
+   * nineteen things and links a shore conversation to a shore calendar entry
+   * correctly; "logan" appeared in three and joined a flight to Boston Logan, a
+   * group chat about a person called Logan, and a cold text from an estate
+   * agent called Logan. Both are rare. Only one is a name.
+   *
+   * A name is the worst possible solo evidence precisely because it is a good
+   * identifier: it points at a person, several people share it, and the same
+   * letters turn up in airports, streets and companies. So a name may still be
+   * one of two shared words, and may never be the only one.
+   *
+   * Read from the entities this store already resolved rather than from a list
+   * of common names, because the question is not "is this a name somewhere" but
+   * "is this a name here". Built once, on first use: most passes never ask.
+   */
+  isPersonName(word: string): boolean {
+    if (this.names === null) {
+      this.names = new Set<string>();
+
+      const rows = this.db
+        .prepare(
+          `SELECT e.display_name AS name FROM entities e
+           WHERE e.kind = 'person' AND e.merged_into IS NULL
+           UNION
+           SELECT i.value AS name FROM identifiers i WHERE i.kind = 'name'`,
+        )
+        .all() as { name: string | null }[];
+
+      for (const row of rows) {
+        // Each part separately: "Isabella Forté" makes both "isabella" and
+        // "forté" names, and a first name on its own is exactly the ambiguous
+        // case this exists for.
+        for (const part of (row.name ?? "").split(/[^\p{L}]+/u)) {
+          if (part.length >= 3) {
+            this.names.add(part.toLowerCase());
+          }
+        }
+      }
+    }
+
+    return this.names.has(word.toLowerCase());
   }
 
   /** Document frequency, counted no further than it needs to be. */

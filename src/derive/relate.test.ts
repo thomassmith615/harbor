@@ -10,7 +10,8 @@
 import { strict as assert } from "node:assert";
 import { after, before, describe, test } from "node:test";
 import { relate, explain, RELATIONSHIP_VERSION } from "./relate.js";
-import { contentTerms, soloCeilingFor } from "./terms.js";
+import { TermIndex, contentTerms, longEnoughAlone, soloCeilingFor } from "./terms.js";
+import { NoiseIndex } from "./noise.js";
 import { derive } from "./pipeline.js";
 import { resolveEntities } from "./entities.js";
 import { PRINCIPAL, seedFixture } from "../fixtures/store.js";
@@ -307,6 +308,50 @@ describe("the failures from the first real run", () => {
   });
 });
 
+describe("what one shared word may not do", () => {
+  // All three from one situation in a real store: a flight to Boston Logan, a
+  // family group chat about somebody called Logan, and a cold text from an
+  // estate agent called Logan. The graph called them one thing.
+  test("a name is never the only evidence", () => {
+    const terms = new TermIndex(store.db);
+
+    // Whatever its frequency. A name points at a person, several people share
+    // it, and the same letters turn up in airports and streets.
+    // "Devin Ashford" is the fixture's one named contact, so both parts of that
+    // name are names here and a place is not.
+    assert.ok(terms.isPersonName("devin"), "a contact's first name is not recognised");
+    assert.ok(terms.isPersonName("ashford"), "a contact's surname is not recognised");
+    assert.ok(!terms.isPersonName("wildwood"), "a place was mistaken for a person");
+    assert.ok(!terms.isPersonName("brennans"), "the marquee good link was broken");
+  });
+
+  test("a short word is never the only evidence", () => {
+    // "dece", four characters from a truncated reminder, linked a laundry
+    // reminder to a restaurant transaction twenty-five days apart.
+    assert.ok(!longEnoughAlone("dece"));
+    assert.ok(!longEnoughAlone("logan"));
+    assert.ok(longEnoughAlone("wildwood"));
+    assert.ok(longEnoughAlone("coyote"));
+  });
+
+  test("the solo bar itself is unchanged", () => {
+    // Recorded because tightening this was the obvious response to "logan" and
+    // it was wrong: "wildwood" appears in nineteen things and is a good link.
+    // Frequency cannot tell the two apart.
+    assert.equal(soloCeilingFor(120), 20);
+  });
+
+  test("a conversation you never replied to is not linked by a word", () => {
+    const noise = new NoiseIndex(store.db);
+    const cold = episodeFor("msg-cold-1");
+
+    assert.ok(
+      noise.isOneWayEpisode(cold.id),
+      "a conversation with no outbound message was not treated as one-way",
+    );
+  });
+});
+
 describe("the graph declines to guess", () => {
   test("a newsletter is connected to nothing", () => {
     const newsletter: NodeRef = { kind: "item", id: itemFor("mail-newsletter") };
@@ -464,8 +509,8 @@ describe("running it again changes nothing", () => {
       kind: "email",
       direction: "inbound",
       threadId: null,
-      title: "Your booking QKZT-4417 is confirmed",
-      body: "Reference QKZT-4417. Doors at seven.",
+      title: "Your booking QKZT4417 is confirmed",
+      body: "Booking QKZT4417. Doors at seven.",
       author: "tickets@venue.example",
       participants: [],
       occurredAt: when,
@@ -480,8 +525,8 @@ describe("running it again changes nothing", () => {
       externalId: "late-event-1",
       kind: "event",
       threadId: null,
-      title: "Venue, ref QKZT-4417",
-      body: "QKZT-4417",
+      title: "Venue, booking QKZT4417",
+      body: "Booking QKZT4417",
       author: null,
       participants: [],
       occurredAt: Date.UTC(2026, 8, 14, 23, 0, 0),
@@ -521,6 +566,49 @@ describe("running it again changes nothing", () => {
       0,
       "the queue did not drain, so these items are relinked on every pass forever",
     );
+  });
+});
+
+describe("changing the linkers redraws the graph", () => {
+  test("an edge an older version drew does not survive", () => {
+    // The failure this pins: bumping RELATIONSHIP_VERSION queued every node
+    // again and left the edges alone, because nothing deletes an edge and
+    // there is no version on one to expire it by. The pass re-judged every
+    // pair, declined to draw the ones it now disagreed with, and reported
+    // "0 connections drawn" while every wrong edge stayed exactly where it was.
+    //
+    // A fix that worked and a fix that did nothing produced identical output,
+    // which is why this went two releases unnoticed.
+    const invented = store.db
+      .prepare(
+        `INSERT INTO relationships
+           (id, from_kind, from_id, to_kind, to_id, kind, confidence, evidence, detector,
+            created_at)
+         SELECT 'rel_stale', 'item', a.id, 'item', b.id, 'about_same', 0.5,
+                'drawn by a linker that no longer exists', 'gone', 0
+           FROM items a, items b
+          WHERE a.id <> b.id
+          LIMIT 1`,
+      )
+      .run().changes;
+
+    assert.equal(invented, 1, "could not plant a stale edge");
+
+    // Every node claims an older linker set, which is what an upgrade looks
+    // like.
+    store.db.prepare(`UPDATE items SET relationships_version = 1`).run();
+    store.db.prepare(`UPDATE episodes SET relationships_version = 1`).run();
+
+    relate(store.db, { principalId: PRINCIPAL, timezone: "America/New_York" });
+
+    const survived = store.db
+      .prepare(`SELECT COUNT(*) AS n FROM relationships WHERE id = 'rel_stale'`)
+      .get() as { n: number };
+
+    assert.equal(survived.n, 0, "an edge from an older linker version survived a redraw");
+
+    // And the real graph came back, rather than the clear leaving it empty.
+    assert.ok(countEdges(store.db) > 0, "the redraw cleared the graph and did not rebuild it");
   });
 });
 

@@ -30,6 +30,7 @@ import { indexReferences, REFERENCE_VERSION } from "./references.js";
 import { TermIndex } from "./terms.js";
 import { NoiseIndex } from "./noise.js";
 import {
+  clearEdges,
   countEdges,
   countPendingRelationships,
   crossSourceEdges,
@@ -38,6 +39,8 @@ import {
   edgeBreakdown,
   link,
   markRelated,
+  outdatedNodeCount,
+  resetRelationshipVersions,
 } from "../store/relationships.js";
 import { countReferences, referencesFor } from "../store/references.js";
 import { entitiesOfNode, nodeKey, NodeResolver } from "../store/nodes.js";
@@ -155,6 +158,27 @@ function pendingNodes(db: DB, limit: number): readonly NodeRef[] {
 
 export function relate(db: DB, options: RelateOptions): RelateReport {
   const started = Date.now();
+
+  // A linker change is a rebuild, not a top-up.
+  //
+  // Bumping RELATIONSHIP_VERSION used to queue every node again and leave the
+  // existing edges alone, because nothing deletes an edge and there is no
+  // version on one to expire it by. The pass then re-judged every pair,
+  // declined to draw the edges it now disagreed with, and reported "0
+  // connections drawn" while every wrong edge stayed exactly where it was. From
+  // outside, a fix that worked and a fix that did nothing looked the same.
+  //
+  // Clearing here rather than behind a flag, because the flag existed
+  // (`harbor dev relate --rebuild`) and nobody upgrading knows to type it.
+  if (outdatedNodeCount(db, RELATIONSHIP_VERSION) > 0) {
+    const removed = clearEdges(db);
+    resetRelationshipVersions(db);
+
+    options.onNote?.(
+      `the linkers changed, so ${String(removed)} edges were thrown away and the graph ` +
+        `is being drawn again from scratch`,
+    );
+  }
 
   // Phase 1. References first, always, and not subject to the node limit: a
   // partially indexed store draws edges that a later run would have drawn

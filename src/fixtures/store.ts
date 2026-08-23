@@ -241,6 +241,27 @@ const SEEDS: readonly Seed[] = [
     at: NOW - 5 * DAY,
   },
 
+  // ---- a stranger, never answered ----
+  //
+  // From a real store: a cold text from an estate agent that linked itself to a
+  // flight and to a family group chat, because all three contained the word
+  // "logan". One-way mail was already excluded from shared-word linking and a
+  // text message could never qualify, however plainly it was a stranger.
+  {
+    stream: "imessage",
+    externalId: "msg-cold-1",
+    kind: "message",
+    direction: "inbound",
+    threadId: "chat-cold",
+    title: "+15550199234",
+    body:
+      "Hi good afternoon! My name is Logan. Do you have any interest in selling " +
+      "1001 Trenton Pl? If you do, I would be happy to speak. Have a nice day!",
+    author: "+15550199234",
+    participants: ["+15550199234"],
+    at: NOW - 3 * DAY,
+  },
+
   // ---- shore: one distinctive word, no second word to lean on ----
   {
     stream: "imessage",

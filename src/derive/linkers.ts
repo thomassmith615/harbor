@@ -23,6 +23,7 @@
 import type { Candidate } from "./candidates.js";
 import type { GraphNode } from "../store/nodes.js";
 import type { RelationshipInput } from "../store/relationships.js";
+import { longEnoughAlone } from "./terms.js";
 import type { TermIndex } from "./terms.js";
 
 /**
@@ -30,8 +31,17 @@ import type { TermIndex } from "./terms.js";
  *
  * 3: nodes may be episodes, conversational messages are no longer subjects, and
  * `about_same` exists.
+ * 4: one shared word may no longer be a name, may not be shorter than six
+ * characters, and a conversation you never replied to is not linked by words.
+ *
+ * Bumping this now genuinely redraws. It used to only re-judge: every node was
+ * queued again and the edges already in the table stayed, because nothing
+ * deletes an edge and there is no version column to expire one by. So a run
+ * after a linker change reported "0 connections drawn" and left every wrong
+ * edge exactly where it was, which is indistinguishable from the change having
+ * worked and found nothing to fix.
  */
-export const RELATIONSHIP_VERSION = 3;
+export const RELATIONSHIP_VERSION = 4;
 
 export interface LinkerContext {
   readonly principalId: string;
@@ -380,7 +390,16 @@ function isStrongOverlap(words: readonly string[], terms: TermIndex): boolean {
 
   const only = words[0];
 
-  return only !== undefined && terms.frequency(only) <= terms.soloCeiling;
+  if (only === undefined || !longEnoughAlone(only)) {
+    return false;
+  }
+
+  // A name may be half the evidence and never all of it.
+  if (terms.isPersonName(only)) {
+    return false;
+  }
+
+  return terms.frequency(only) <= terms.soloCeiling;
 }
 
 /**

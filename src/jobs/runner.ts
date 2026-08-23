@@ -28,6 +28,7 @@ import {
   cancelRequested,
   createJob,
   finishJob,
+  getJob,
   listJobs,
   requestCancel,
   startJob,
@@ -292,6 +293,50 @@ export function enqueue(
  * behind it. The pass may still be mid-flight, but the passes are resumable and
  * the alternative is a task that can never run again.
  */
+/**
+ * Run a task here and now, and wait for it.
+ *
+ * The same execution path `enqueue` uses, awaited rather than detached, for a
+ * person at a terminal who wants the answer rather than a job id.
+ *
+ * It exists so there is one implementation of "run a task". There were two:
+ * this one, and a hand-written switch in the scheduler covering twelve of the
+ * seventeen tasks with a silent `unknown task X` for the rest. `harbor dev run
+ * relate` hit that gap and printed nothing useful, and so would `pulse`,
+ * `recent` and `history`. The scheduler's own tick never used that switch, so
+ * the broken path was the one a person types.
+ */
+export async function runNow(
+  db: DB,
+  task: JobTask,
+  context: JobContext,
+  requestedBy = "cli",
+): Promise<string> {
+  const existing = activeJob(db, task);
+
+  if (existing !== null) {
+    return `${task} is already running as ${existing.id}`;
+  }
+
+  const blocker = blockedBy(db, task);
+
+  if (blocker !== null) {
+    return `${task} is waiting on ${blocker.task}`;
+  }
+
+  const job = createJob(db, { principalId: context.principalId, task, requestedBy });
+
+  await execute(db, job.id, task, context);
+
+  const finished = getJob(db, job.id);
+
+  if (finished === null) {
+    return `${task} finished`;
+  }
+
+  return finished.error ?? finished.note ?? finished.state;
+}
+
 export function stop(db: DB, id: string, force = false): { readonly stopped: boolean } {
   const requested = requestCancel(db, id);
 

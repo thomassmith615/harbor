@@ -392,6 +392,16 @@ function contentCandidates(
     return;
   }
 
+  // The same rule, for a conversation you never answered. It was missing
+  // because the broadcast test is scoped to non-conversational connectors, so a
+  // text message could never qualify however plainly it was a stranger.
+  if (subject.ref.kind === "episode" && context.noise.isOneWayEpisode(subject.ref.id)) {
+    collector.notes.push(
+      "you never replied in this conversation, so it is not linked by shared words",
+    );
+    return;
+  }
+
   const terms = context.terms.distinctive(subject.text);
 
   if (terms.length === 0) {

@@ -94,7 +94,7 @@ export class NoiseIndex {
   private templateShapes = 0;
   private broadcastSenders = 0;
 
-  constructor(db: DB) {
+  constructor(private readonly db: DB) {
     const conversational = CONVERSATIONAL_CONNECTORS.map((id) => `'${id}'`).join(", ");
 
     // Conversational streams are excluded, and leaving them in was a bug worth
@@ -234,6 +234,8 @@ export class NoiseIndex {
   }
 
   /** A recurring notification, or a repeat of a reminder. Not a graph node. */
+  private readonly oneWayEpisodes = new Map<string, boolean>();
+
   isTemplate(itemId: string): boolean {
     return this.templates.has(itemId) || this.repeats.has(itemId);
   }
@@ -241,6 +243,45 @@ export class NoiseIndex {
   /** One-way mail. May be linked by reference or by a reminder, never by a word. */
   isBroadcast(itemId: string): boolean {
     return this.broadcasts.has(itemId) || this.templates.has(itemId);
+  }
+
+  /**
+   * A conversation you never answered.
+   *
+   * The same principle as one-way mail, applied where it was missing. That rule
+   * was scoped to non-conversational connectors, so a text message was never
+   * eligible, and a cold text from an estate agent asking about a property got
+   * to link itself to a flight and a family group chat because all three
+   * happened to contain the word "logan".
+   *
+   * Somebody you have never replied to is not talking with you, whatever the
+   * medium. As with mail, this only removes shared-word linking: a reference
+   * code in a delivery text still connects, and a reminder still covers it.
+   *
+   * Computed on demand and cached. Most episodes are never asked about.
+   */
+  isOneWayEpisode(episodeId: string): boolean {
+    const known = this.oneWayEpisodes.get(episodeId);
+
+    if (known !== undefined) {
+      return known;
+    }
+
+    const outbound = (
+      this.db
+        .prepare(
+          `SELECT COUNT(*) AS n FROM episode_items ei
+           JOIN items i ON i.id = ei.item_id
+           WHERE ei.episode_id = ? AND i.direction = 'outbound' AND i.deleted_at IS NULL`,
+        )
+        .get(episodeId) as { n: number }
+    ).n;
+
+    const oneWay = outbound === 0;
+
+    this.oneWayEpisodes.set(episodeId, oneWay);
+
+    return oneWay;
   }
 
   /** One-way mail, for callers that filter in SQL. */

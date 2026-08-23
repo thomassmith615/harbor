@@ -859,6 +859,29 @@ export function clearEdges(db: DB): number {
   return db.prepare(`DELETE FROM relationships`).run().changes;
 }
 
+/**
+ * How many nodes were related by a linker set older than this one.
+ *
+ * Distinct from "never related", which is null and is the ordinary incremental
+ * case. A number lower than the current version means the graph contains edges
+ * drawn by rules that have since changed, and those edges cannot be expired
+ * individually because an edge carries no version.
+ */
+export function outdatedNodeCount(db: DB, version: number): number {
+  return (
+    db
+      .prepare(
+        `SELECT
+           (SELECT COUNT(*) FROM items
+             WHERE relationships_version IS NOT NULL AND relationships_version < @version)
+         + (SELECT COUNT(*) FROM episodes
+             WHERE relationships_version IS NOT NULL AND relationships_version < @version)
+           AS n`,
+      )
+      .get({ version }) as { n: number }
+  ).n;
+}
+
 /** Marks every node as needing to be related again. */
 export function resetRelationshipVersions(db: DB): number {
   const work = db.transaction(() => {
