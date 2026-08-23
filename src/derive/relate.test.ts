@@ -14,6 +14,7 @@ import { contentTerms, soloCeilingFor } from "./terms.js";
 import { derive } from "./pipeline.js";
 import { resolveEntities } from "./entities.js";
 import { PRINCIPAL, seedFixture } from "../fixtures/store.js";
+import { upsertItem } from "../store/items.js";
 import { fixtureEmbedder, openTestStore, type TestStore } from "../fixtures/harness.js";
 import {
   countEdges,
@@ -22,6 +23,8 @@ import {
   edgesFor,
   topThreads,
   threadNodes,
+  getThread,
+  renameThread,
 } from "../store/relationships.js";
 import { nodeKey, parseNodeRef } from "../store/nodes.js";
 import type { NodeRef } from "../store/nodes.js";
@@ -423,6 +426,102 @@ describe("running it again changes nothing", () => {
       "an incremental run and a full rebuild disagree about the graph",
     );
   });
+
+  test("new items after a full pass still draw edges", async () => {
+    // The gap in the two tests above, and the one that matters most.
+    //
+    // "A re-run draws nothing" and "a rebuild matches the incremental run" are
+    // both satisfied by a pass that has stopped drawing edges entirely. A
+    // frozen graph is indistinguishable from a correct one by every assertion
+    // in this file until something new arrives, and what arrives in real use is
+    // a source connected months after the rest.
+    //
+    // The symptom is `0 connections drawn` on every run forever, which reads as
+    // "nothing new was related" and is exactly what a correct pass says on a
+    // quiet day. Weeks could pass before anybody looked.
+    const streamId = store.db
+      .prepare(`SELECT id FROM streams WHERE connector_id = 'apple-calendar'`)
+      .get() as { id: string };
+
+    const mailStream = store.db
+      .prepare(`SELECT id FROM streams WHERE connector_id = 'imap'`)
+      .get() as { id: string };
+
+    const accountOf = (id: string): string =>
+      (store.db.prepare(`SELECT account_id AS a FROM streams WHERE id = ?`).get(id) as {
+        a: string;
+      }).a;
+
+    const when = Date.UTC(2026, 8, 2, 15, 0, 0);
+
+    // A confirmation code shared between a new mail and a new calendar entry:
+    // two sources, no people in common, which is the pairing the reference
+    // linker exists for.
+    upsertItem(store.db, {
+      accountId: accountOf(mailStream.id),
+      streamId: mailStream.id,
+      externalId: "late-mail-1",
+      kind: "email",
+      direction: "inbound",
+      threadId: null,
+      title: "Your booking QKZT-4417 is confirmed",
+      body: "Reference QKZT-4417. Doors at seven.",
+      author: "tickets@venue.example",
+      participants: [],
+      occurredAt: when,
+      endsAt: null,
+      state: null,
+      raw: { fixture: "late-mail-1" },
+    });
+
+    upsertItem(store.db, {
+      accountId: accountOf(streamId.id),
+      streamId: streamId.id,
+      externalId: "late-event-1",
+      kind: "event",
+      threadId: null,
+      title: "Venue, ref QKZT-4417",
+      body: "QKZT-4417",
+      author: null,
+      participants: [],
+      occurredAt: Date.UTC(2026, 8, 14, 23, 0, 0),
+      endsAt: Date.UTC(2026, 8, 15, 1, 0, 0),
+      state: null,
+      raw: { fixture: "late-event-1" },
+    });
+
+    await derive(store.db, fixtureEmbedder(), {});
+    resolveEntities(store.db, {});
+
+    assert.ok(
+      countPendingRelationships(store.db, RELATIONSHIP_VERSION) > 0,
+      "new items were not queued for relating, so the graph can never grow",
+    );
+
+    const report = relate(store.db, {
+      principalId: PRINCIPAL,
+      timezone: "America/New_York",
+    });
+
+    assert.ok(
+      report.edgesDrawn > 0,
+      "a pass over new cross-source items drew nothing, which is a frozen graph",
+    );
+
+    assert.ok(
+      connected({ kind: "item", id: itemFor("late-mail-1") }, {
+        kind: "item",
+        id: itemFor("late-event-1"),
+      }),
+      "a shared confirmation code across two sources did not connect them",
+    );
+
+    assert.equal(
+      countPendingRelationships(store.db, RELATIONSHIP_VERSION),
+      0,
+      "the queue did not drain, so these items are relinked on every pass forever",
+    );
+  });
 });
 
 describe("explanation matches the pass", () => {
@@ -444,5 +543,33 @@ describe("explanation matches the pass", () => {
     const drawn = result.candidates.filter((candidate) => candidate.drawn.length > 0);
 
     assert.ok(drawn.length > 0, "why reports no edges for something the pass linked");
+  });
+});
+
+describe("a title the person gave, and taking it back", () => {
+  test("a rename sticks and an empty one hands it back", () => {
+    // Both directions, because only one of them existed. A user title is exempt
+    // from renaming and from retirement, so a rename made while testing pinned
+    // a real situation open under a meaningless name with no way to undo it.
+    const thread = topThreads(store.db, PRINCIPAL, { limit: 1, minSources: 2 })[0];
+
+    assert.ok(thread !== undefined, "no situation to rename");
+
+    assert.ok(renameThread(store.db, thread.id, "Test rename"));
+
+    const renamed = getThread(store.db, thread.id);
+    assert.equal(renamed?.title, "Test rename");
+    assert.equal(renamed?.titleSource, "user");
+
+    assert.ok(renameThread(store.db, thread.id, ""));
+
+    const returned = getThread(store.db, thread.id);
+    assert.equal(returned?.titleSource, "derived", "an empty title did not hand it back");
+    assert.equal(returned?.summary, null, "a summary of the old name survived");
+
+    // Whitespace is an empty title, not a name made of spaces.
+    assert.ok(renameThread(store.db, thread.id, "Real name"));
+    assert.ok(renameThread(store.db, thread.id, "   "));
+    assert.equal(getThread(store.db, thread.id)?.titleSource, "derived");
   });
 });

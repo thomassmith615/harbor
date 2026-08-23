@@ -26,6 +26,7 @@ let conversationId = null;
 let asking = false;
 let timer = null;
 let reachable = true;
+let wasBusy = false;
 
 /* ------------------------------------------------------------------ *
  * markdown
@@ -337,6 +338,16 @@ async function refresh() {
     reachable = false;
   }
 
+  // A pass that redraws the graph invalidates what Noticed is showing. Cheap
+  // to notice here and wrong to poll for.
+  const nowBusy = busy();
+
+  if (wasBusy && !nowBusy) {
+    noticed = null;
+  }
+
+  wasBusy = nowBusy;
+
   renderHealth();
   renderLamps();
   renderView();
@@ -461,6 +472,7 @@ function switchTo(next) {
   }
 
   $("viewChat").hidden = next !== "chat";
+  $("viewNoticed").hidden = next !== "noticed";
   $("viewSources").hidden = next !== "sources";
   $("viewRun").hidden = next !== "run";
   $("composer").hidden = next !== "chat";
@@ -482,9 +494,304 @@ for (const button of $("tabs").querySelectorAll("button")) {
 }
 
 function renderView() {
+  if (view === "noticed") renderNoticed();
   if (view === "sources") renderSources();
   if (view === "run") renderRun();
   if (view === "chat") renderOpener();
+}
+
+/* ------------------------------------------------------------------ *
+ * noticed
+ *
+ * The half of Harbor that does not wait to be asked. Situations are computed
+ * on every pulse and the digest is written nightly, and until now the only way
+ * to see either was a terminal, which makes a private secondary brain
+ * something you have to remember to interrogate.
+ *
+ * Fetched on demand rather than folded into /overview: this is a screen you
+ * open, not a thing the shell polls, and putting it in the poll would mean
+ * every phone reassembles every situation every twenty seconds.
+ * ------------------------------------------------------------------ */
+
+let noticed = null;
+
+async function loadNoticed() {
+  try {
+    const [situations, digest] = await Promise.all([
+      json("/situations?limit=20"),
+      json("/digest").catch(() => ({ digest: null })),
+    ]);
+
+    noticed = { situations: situations.situations ?? [], digest: digest.digest ?? null };
+  } catch (error) {
+    if (error.message !== "unpaired") noticed = { situations: [], digest: null, error: error.message };
+  }
+
+  if (view === "noticed") renderNoticed();
+}
+
+function renderNoticed() {
+  const stage = $("viewNoticed");
+  stage.textContent = "";
+
+  if (noticed === null) {
+    stage.append(el("div", "empty", "Looking\u2026"));
+    loadNoticed();
+    return;
+  }
+
+  if (noticed.digest) {
+    stage.append(el("div", "section-title", "Latest digest"));
+
+    const card = el("div", "digest");
+    card.append(el("div", "digest-when", ago(noticed.digest.at)));
+
+    const body = el("div", "digest-text");
+    body.innerHTML = markdown(noticed.digest.text);
+    card.append(body);
+    stage.append(card);
+  }
+
+  stage.append(el("div", "section-title", "Situations"));
+
+  if (noticed.situations.length === 0) {
+    stage.append(
+      el(
+        "div",
+        "empty",
+        noticed.error ??
+          "Nothing yet. A situation needs things from two different sources that " +
+            "turn out to be about each other, so this fills in as Harbor syncs.",
+      ),
+    );
+    return;
+  }
+
+  for (const situation of noticed.situations) {
+    stage.append(situationCard(situation));
+  }
+}
+
+function situationCard(situation) {
+  const card = el("button", "card situation");
+  card.type = "button";
+
+  card.append(el("h3", "card-title", situation.title ?? "Untitled"));
+
+  // The sentence Harbor wrote, under the title it took. The title is often a
+  // calendar entry or a subject line and names one member; this says what the
+  // whole thing is, which is what decides whether it is worth opening.
+  if (situation.summary) {
+    card.append(el("p", "card-sub", situation.summary));
+  }
+
+  const badges = el("div", "badges");
+
+  // Which sources, named. "3 sources" is a statistic; "iMessage, calendar,
+  // mail" is the claim, and the claim is what makes somebody tap.
+  const sources = [...new Set(situation.items.map((item) => item.kind))];
+
+  badges.append(
+    el("span", "badge badge-count", situation.sourceCount + " sources"),
+  );
+
+  for (const kind of sources.slice(0, 4)) {
+    badges.append(el("span", "badge", kind));
+  }
+
+  card.append(badges);
+  card.append(
+    el(
+      "div",
+      "when-line",
+      situation.itemCount +
+        " things" +
+        (situation.startsAt ? ", " + ago(situation.startsAt) + " onward" : ""),
+    ),
+  );
+
+  card.addEventListener("click", () => { openSituation(situation.id); });
+
+  return card;
+}
+
+function renderNode(into, node) {
+  into.textContent = "";
+
+  if (node.kind === "episode") {
+    for (const message of node.messages) {
+      const line = el("div", "message");
+      const head = el("div", "message-head");
+      head.append(el("span", "message-from", message.from));
+      head.append(el("span", "message-when", message.when));
+      line.append(head);
+      line.append(el("div", "message-text", message.text));
+      into.append(line);
+    }
+
+    if (node.messages.length === 0) {
+      into.append(el("p", "card-sub", "Nothing readable in this one."));
+    }
+
+    return;
+  }
+
+  if (node.from) {
+    into.append(el("div", "message-from", node.from));
+  }
+
+  into.append(el("div", "message-text", node.body || "No body."));
+}
+
+async function openSituation(id) {
+  sheet("Loading\u2026", (body) => {
+    body.append(el("p", null, "Reading the evidence."));
+  });
+
+  let detail;
+
+  try {
+    detail = await json("/situations/" + id);
+  } catch (error) {
+    sheet("Could not open it", (body) => {
+      body.append(el("p", null, error.message));
+    });
+    return;
+  }
+
+  sheet(detail.title ?? "Situation", (body) => {
+    const badges = el("div", "badges");
+
+    for (const source of detail.sources) {
+      badges.append(el("span", "badge", source));
+    }
+
+    body.append(badges);
+
+    if (detail.summary) {
+      body.append(el("p", "sheet-summary", detail.summary));
+    }
+
+    // Why each thing is here, attached to the thing rather than collected in a
+    // footnote. Reading "shares the confirmation code QKZT-4417" under the
+    // calendar entry is what turns a list into an argument.
+    const byNode = new Map();
+
+    // Both ends. An edge is symmetric and the evidence explains the pair, so
+    // indexing it only under `from` leaves whichever member happened to be the
+    // other end with no reason shown at all. That is the one thing this view
+    // must not do: a thing sitting in a situation with nothing said about why
+    // is exactly the unexplained claim it exists to prevent.
+    const attach = (key, link) => {
+      if (!byNode.has(key)) byNode.set(key, []);
+
+      const seen = byNode.get(key);
+
+      if (!seen.some((other) => other.evidence === link.evidence)) {
+        seen.push(link);
+      }
+    };
+
+    for (const link of detail.links) {
+      attach(link.from, link);
+      attach(link.to, link);
+    }
+
+    const spine = el("div", "spine");
+
+    for (const member of detail.members) {
+      const node = el("div", "node");
+
+      const head = el("div", "node-head");
+      head.append(el("span", "node-title", member.title ?? member.kind));
+      head.append(el("span", "badge", member.source));
+      head.append(el("span", "node-when", member.when));
+      node.append(head);
+
+      if (member.preview) {
+        node.append(el("div", "node-preview", member.preview));
+      }
+
+      const reasons = byNode.get(member.ref) ?? [];
+
+      if (reasons.length > 0) {
+        const why = el("div", "node-why");
+
+        // One reason per neighbour, strongest first, and the rest folded into
+        // a count. Four linkers agreeing is worth knowing; four near-identical
+        // sentences is not worth reading.
+        for (const reason of reasons.slice(0, 2)) {
+          const line = el("div", "why", reason.evidence);
+
+          if (reason.also.length > 0) {
+            line.append(
+              el("div", "why-also", "and " + reason.also.length + " other reason" +
+                (reason.also.length === 1 ? "" : "s")),
+            );
+          }
+
+          why.append(line);
+        }
+
+        node.append(why);
+      }
+
+      // Tapping reads it. The evidence says why something is here; this says
+      // what it actually was, which is the question the evidence provokes.
+      const open = el("button", "btn btn-quiet node-read", "Read it");
+      open.type = "button";
+
+      const content = el("div", "node-content");
+      content.hidden = true;
+
+      open.addEventListener("click", async () => {
+        if (!content.hidden) {
+          content.hidden = true;
+          open.textContent = "Read it";
+          return;
+        }
+
+        if (content.childElementCount === 0) {
+          open.textContent = "Reading\u2026";
+
+          try {
+            renderNode(content, await json("/nodes/" + member.ref.replace(":", "/")));
+          } catch (error) {
+            content.append(el("p", "sheet-error", error.message));
+          }
+        }
+
+        content.hidden = false;
+        open.textContent = "Hide";
+      });
+
+      node.append(open);
+      node.append(content);
+
+      spine.append(node);
+    }
+
+    body.append(spine);
+
+    const ask = el("button", "btn btn-primary btn-wide", "Ask about this");
+    ask.type = "button";
+    ask.style.marginTop = "16px";
+    ask.addEventListener("click", () => {
+      closeSheet();
+      switchTo("chat");
+
+      // The id goes in the question. Sending only the title asked Harbor about
+      // a string like "Test rename" or "issy?", which matches nothing and got
+      // the honest answer that it had never heard of it. The situations tool
+      // takes an id, so give it one.
+      $("question").value =
+        'Tell me about the situation "' + (detail.title ?? "this one") + '" (id ' + detail.id + ").";
+
+      $("composer").requestSubmit();
+    });
+
+    body.append(ask);
+  });
 }
 
 /* ---------- sources ---------- */

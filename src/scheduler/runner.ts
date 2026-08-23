@@ -14,6 +14,7 @@ import { classifyItems } from "../derive/classify.js";
 import { composeBrief, renderBrief, runDetectors } from "../derive/brief.js";
 import { buildCommitments } from "../derive/commitments.js";
 import { produceDigest } from "../derive/digest.js";
+import { nameSituations } from "../derive/name.js";
 import { extractPurchases } from "../derive/extract.js";
 import { proposeFacts } from "../derive/facts.js";
 import type { JobTask } from "../jobs/runner.js";
@@ -181,6 +182,18 @@ export async function runTaskDirectly(
     const report = await proposeFacts(db, { principalId: context.principalId, limit: 10 });
 
     return `${String(report.proposed)} proposed from ${String(report.read)} conversations`;
+  }
+
+  if (task === "name") {
+    const report = await nameSituations(db, {
+      principalId: context.principalId,
+      timezone: context.timezone,
+    });
+
+    return (
+      `${String(report.written)} summarised, ${String(report.failed)} failed, ` +
+      `${String(report.considered)} were without one`
+    );
   }
 
   if (task === "digest") {

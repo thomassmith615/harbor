@@ -107,6 +107,34 @@ export const TASK_CLASSES: readonly TaskClass[] = [
     cacheable: true,
   },
   {
+    id: "situation.summarize",
+    description: "Saying in one sentence what a situation is about, from its members.",
+    requires: [],
+    // This was local_only and a 3B model wrote nonsense with it: a haircut
+    // reminder became a trip to Puerto Rico, a taxi receipt became a trip to
+    // the taxi office, and roughly every situation became "a trip". Reading six
+    // fragments and saying what they have in common is a harder task than it
+    // looks, and no prompt rescues a model that small from it.
+    //
+    // The privacy trade is smaller than it appears. Asking Harbor anything
+    // already sends item content to the same tier under the same policy gate,
+    // so a summary of things the chat would happily quote is not a new
+    // disclosure. What it buys is the difference between a sentence worth
+    // reading and one that makes the whole surface untrustworthy.
+    privacy: "cloud_ok",
+    // Named rather than inferred. Leaving it to capability matching would send
+    // this back to the cheapest tier that technically satisfies "no
+    // requirements", which is exactly where it started.
+    floor: "cloud_cheap",
+    latency: "batch",
+    // Two models would write two valid sentences and agree on nothing, so a
+    // shadow comparison teaches nothing here. The person reads this directly,
+    // above the evidence it claims to summarise, which is the real check.
+    verification: "human",
+    maxTokens: 200,
+    cacheable: true,
+  },
+  {
     id: "extract.structured",
     description: "Pulling structured records out of an item, for projections.",
     requires: ["json"],

@@ -26,6 +26,7 @@ export type ScheduledTask =
   | "extract"
   | "notice"
   | "digest"
+  | "name"
   | "pipeline"
   | "backup";
 
@@ -42,6 +43,7 @@ export const SCHEDULABLE: readonly ScheduledTask[] = [
   "extract",
   "notice",
   "signals",
+  "name",
   "digest",
   "pipeline",
   "backup",

@@ -59,6 +59,8 @@
       <div class="tail" id="tail"></div>
     </section>
 
+    <section class="view" id="viewNoticed" hidden></section>
+
     <section class="view" id="viewSources" hidden></section>
 
     <section class="view" id="viewRun" hidden></section>
@@ -79,6 +81,10 @@
     <button type="button" data-view="chat" aria-selected="true">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 0 1-11.6 7.1L4 20l1-4.2A8 8 0 1 1 20 12Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
       <span>Ask</span>
+    </button>
+    <button type="button" data-view="noticed" aria-selected="false">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="7" cy="8" r="2.6" fill="none" stroke="currentColor" stroke-width="1.7"/><circle cx="17" cy="8" r="2.6" fill="none" stroke="currentColor" stroke-width="1.7"/><circle cx="12" cy="17" r="2.6" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M9.3 9.4 10.9 14.7M14.7 9.4 13.1 14.7M9.6 8h4.8" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
+      <span>Noticed</span>
     </button>
     <button type="button" data-view="sources" aria-selected="false">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M4 8h16M4 16h16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>

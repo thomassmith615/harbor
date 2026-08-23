@@ -109,10 +109,18 @@ harbor daemon
 Then open `http://127.0.0.1:8484`. It asks to be paired; on the machine running
 Harbor, `harbor device code --act` prints a short-lived single-use code.
 
-Three views. **Ask** is the product, and it streams what it is reading while it
-reads it. **Sources** shows what is connected, when each last synced, and
-connects new ones without a terminal. **Run** has four operations (sync, fill in
-history, rebuild links, back up), what is running now, and what has run recently.
+Four views. **Ask** streams what it is reading while it reads it. **Noticed** is
+the half that does not wait to be asked: the nightly digest, and every situation
+Harbor has assembled, each one opening to show what is in it and the evidence
+for why. **Sources** shows what is connected, when each last synced, and connects
+new ones without a terminal. **Run** has four operations (sync, fill in history,
+rebuild links, back up), what is running now, and what has run recently.
+
+Noticed is where the cross-source claim is checkable rather than asserted. A
+situation is a claim Harbor made about your life using rules you did not write,
+and the difference between that being useful and being unsettling is whether you
+can see what it was reading. Every edge carries a sentence a person can read, and
+that sentence sits under the thing it explains.
 
 The page is three files in `src/surfaces/ui/`, served by the daemon from the
 same origin as the API. No build step, no bundler, no second repository: one
@@ -125,9 +133,11 @@ shows the same running job at the same progress. Chat history does not persist,
 deliberately: conversations are stored server-side and `harbor ask` reads them,
 but a reload starts a fresh thread.
 
-To leave it running and reach it from a phone, see `docs/RUNNING.md`. The short
-version is `harbor install-service` plus Tailscale, which keeps Harbor bound to
-loopback and still gives you a real HTTPS address from anywhere.
+To leave it running and reach it from a phone: `harbor install-service`, then
+`harbor remote`. The second checks the path from outside and prints whichever
+step is missing. Underneath it is Tailscale on its free plan, which keeps Harbor
+bound to loopback and still gives you a real HTTPS address from anywhere. See
+`docs/RUNNING.md`.
 
 ## What it holds
 

@@ -421,3 +421,90 @@ code {
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
 }
+
+/* ---------- noticed ---------- */
+
+/*
+ * The passive half. A situation is a claim Harbor made about your life by
+ * rules you did not write, so every card leads with which sources are in it
+ * and every detail view leads with why. Confidence is deliberately not a
+ * percentage anywhere: a number implies a precision these linkers do not have,
+ * and the sentence of evidence is the thing worth reading.
+ */
+
+.digest {
+  background: linear-gradient(180deg, var(--raised), var(--panel));
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  padding: 15px 16px;
+  margin-bottom: 9px;
+}
+.digest-when {
+  font: 11px/1 var(--mono); letter-spacing: 0.07em; text-transform: uppercase;
+  color: var(--faint); margin-bottom: 9px;
+}
+.digest-text { font-size: 14.5px; line-height: 1.6; }
+.digest-text p { margin: 0 0 9px; }
+.digest-text > :last-child { margin-bottom: 0; }
+
+.situation { width: 100%; text-align: left; display: block; }
+.situation .card-title { margin-bottom: 7px; }
+
+.badges { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 9px; }
+.badge {
+  font: 10.5px/1 var(--mono); letter-spacing: 0.03em;
+  background: var(--bg); border: 1px solid var(--line);
+  border-radius: 999px; padding: 4px 8px; color: var(--dim);
+}
+.badge-count { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 32%, transparent); }
+
+.when-line { font: 11.5px/1.4 var(--mono); color: var(--faint); margin-top: 7px; }
+
+/* the detail view: a spine with the members hung off it */
+.spine { position: relative; padding-left: 19px; margin-top: 4px; }
+.spine::before {
+  content: ""; position: absolute; left: 4px; top: 6px; bottom: 6px;
+  width: 1px; background: var(--line);
+}
+.node { position: relative; padding: 11px 0; }
+.node + .node { border-top: 1px solid var(--line-soft); }
+.node::before {
+  content: ""; position: absolute; left: -19px; top: 17px;
+  width: 9px; height: 9px; border-radius: 50%;
+  background: var(--panel); border: 1.5px solid var(--accent);
+}
+.node-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.node-title { font-size: 14px; font-weight: 570; }
+.node-when { font: 11px/1 var(--mono); color: var(--faint); margin-left: auto; white-space: nowrap; }
+.node-preview {
+  color: var(--dim); font-size: 13px; margin-top: 5px;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.node-why { margin-top: 8px; }
+.why {
+  font-size: 12.5px; color: var(--dim); line-height: 1.5;
+  border-left: 2px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  padding-left: 9px; margin-bottom: 5px;
+}
+.why-also { color: var(--faint); font-size: 12px; }
+
+.sheet-summary {
+  font-size: 14px; line-height: 1.55; color: var(--text);
+  margin: 12px 0 4px;
+}
+
+.node-read {
+  padding: 5px 10px; font-size: 12.5px; margin-top: 9px;
+  border-radius: var(--r-sm); color: var(--accent);
+}
+.node-content {
+  margin-top: 10px; padding: 10px 12px;
+  background: var(--bg); border: 1px solid var(--line-soft);
+  border-radius: var(--r-md);
+  max-height: 320px; overflow-y: auto;
+}
+.message + .message { margin-top: 11px; padding-top: 11px; border-top: 1px solid var(--line-soft); }
+.message-head { display: flex; align-items: baseline; gap: 9px; }
+.message-from { font-size: 12.5px; font-weight: 620; color: var(--accent); }
+.message-when { font: 10.5px/1 var(--mono); color: var(--faint); margin-left: auto; }
+.message-text { font-size: 13.5px; margin-top: 3px; white-space: pre-wrap; word-break: break-word; }

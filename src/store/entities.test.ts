@@ -121,3 +121,54 @@ describe("naming a transcript", () => {
     assert.equal(named, `Me: call me on ${PHONE} later`);
   });
 });
+
+describe("a number written more than one way", () => {
+  test("every spelling of a known number resolves to the same person", () => {
+    // The bug behind phone numbers showing in situations. iMessage writes
+    // +15551230001; a contact card writes (555) 123-0001. The identifier was
+    // stored through normalizePhone and the lookup normalised by hand,
+    // differently, so the two never met and a contact sitting in your own
+    // address book rendered as a phone number.
+    for (const spelling of ["+15551230001", "(555) 123-0001", "555-123-0001", "5551230001"]) {
+      assert.equal(
+        nameHandles(store.db, spelling),
+        "Esperanza Duprée",
+        `${spelling} did not resolve`,
+      );
+    }
+  });
+
+  test("a number nobody knows is left alone", () => {
+    assert.equal(nameHandles(store.db, "+15550001111"), "+15550001111");
+  });
+
+  test("an entity still displayed as a number uses its name identifier", () => {
+    // display_name is written once, when the entity is created, so an entity
+    // first seen as a phone number keeps that name even after a contact card
+    // is linked to it. The name is on the entity; nothing was reading it.
+    store.db
+      .prepare(
+        `INSERT INTO entities (id, kind, display_name, created_at, updated_at)
+         VALUES ('e_unnamed', 'person', '+15551239999', 0, 0)`,
+      )
+      .run();
+
+    store.db
+      .prepare(
+        `INSERT INTO identifiers (id, entity_id, kind, value, normalized, confidence)
+         VALUES ('i_unnamed', 'e_unnamed', 'handle', '+15551239999', '+15551239999', 1)`,
+      )
+      .run();
+
+    assert.equal(nameHandles(store.db, "+15551239999"), "+15551239999");
+
+    store.db
+      .prepare(
+        `INSERT INTO identifiers (id, entity_id, kind, value, normalized, confidence)
+         VALUES ('i_unnamed_name', 'e_unnamed', 'name', 'Marisol Vance', 'marisol vance', 1)`,
+      )
+      .run();
+
+    assert.equal(nameHandles(store.db, "+15551239999"), "Marisol Vance");
+  });
+});

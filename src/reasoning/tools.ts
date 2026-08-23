@@ -39,7 +39,12 @@
 import { humanWhen, localIso } from "../kernel/time.js";
 import { lookupEntities, resolveEntity } from "../store/entities.js";
 import { composeBrief } from "../derive/brief.js";
-import { connectionsFor, threadNodes, topThreads } from "../store/relationships.js";
+import {
+  connectionsFor,
+  getThread,
+  threadNodes,
+  topThreads,
+} from "../store/relationships.js";
 import { nodeKey, parseNodeRef, summarize } from "../store/nodes.js";
 import type { NodeRef, NodeSummary } from "../store/nodes.js";
 import { episodeForItem, episodeItems, getEpisode, recentCorrespondents } from "../store/episodes.js";
@@ -183,6 +188,13 @@ export const TOOLS: readonly ToolSchema[] = [
     input_schema: {
       type: "object",
       properties: {
+        id: {
+          type: "string",
+          description:
+            "One situation, by the id from a previous result or from the person's message. " +
+            "Use this whenever an id is available: it returns that situation whatever its " +
+            "age, where a plain listing only covers recent ones.",
+        },
         since: {
           type: "string",
           description: "Only situations active after this ISO 8601 time.",
@@ -685,13 +697,34 @@ export async function runTool(
     const since =
       typeof call.input["since"] === "string" ? Date.parse(call.input["since"]) : undefined;
 
-    const found = topThreads(db, context.principal, {
-      limit: typeof call.input["limit"] === "number" ? call.input["limit"] : 8,
-      ...(since === undefined || Number.isNaN(since) ? {} : { since }),
-      // One source is a conversation the source application already shows. Two
-      // is the thing Harbor can see and nothing else can.
-      minSources: 2,
-    });
+    // A named situation is fetched directly rather than hoped for in a listing.
+    //
+    // The interface offers "Ask about this" on a situation, and without this
+    // branch that button sent a title and nothing else. A title like "Test
+    // rename" or "issy?" matches nothing, the listing only covers recent ones,
+    // and the honest answer the model gave was that it had never heard of it.
+    const wanted = typeof call.input["id"] === "string" ? call.input["id"] : null;
+
+    const one = wanted === null ? null : getThread(db, wanted);
+
+    if (wanted !== null && (one === null || one.principalId !== context.principal)) {
+      return {
+        content: JSON.stringify({ situations: [], note: `No situation with id ${wanted}.` }),
+        isError: false,
+        itemIds: [],
+      };
+    }
+
+    const found =
+      one !== null
+        ? [one]
+        : topThreads(db, context.principal, {
+            limit: typeof call.input["limit"] === "number" ? call.input["limit"] : 8,
+            ...(since === undefined || Number.isNaN(since) ? {} : { since }),
+            // One source is a conversation the source application already
+            // shows. Two is the thing Harbor can see and nothing else can.
+            minSources: 2,
+          });
 
     const gate = Gate.open(db);
     const described = [];
@@ -723,7 +756,9 @@ export async function runTool(
       }
 
       described.push({
+        id: thread.id,
         title: thread.title ?? "(unnamed)",
+        ...(thread.summary === null ? {} : { summary: thread.summary }),
         spans: `${humanWhen(thread.startsAt ?? 0, context.timezone)} to ${humanWhen(thread.endsAt ?? 0, context.timezone)}`,
         sources: thread.sourceCount,
         kinds: thread.kind,

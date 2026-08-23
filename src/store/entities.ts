@@ -638,7 +638,11 @@ export function listSelfHandles(db: DB): readonly SelfHandleRow[] {
  */
 /** A phone number or short-code, with or without punctuation. */
 export function isHandle(value: string): boolean {
-  return /^\+?\d[\d\s()-]{6,}$/.test(value.trim());
+  // The leading "(" matters. `(555) 123-0001` is how a contact card writes a
+  // number and this pattern required a digit first, so the one spelling that
+  // comes from an address book was the one spelling that was never treated as
+  // a handle at all.
+  return /^\+?[\d(][\d\s()-]{6,}$/.test(value.trim());
 }
 
 /**
@@ -656,9 +660,25 @@ export function isHandleTitle(title: string): boolean {
 
 export function nameHandles(db: DB, title: string): string {
   const lookup = db.prepare(
-    `SELECT e.display_name AS name FROM identifiers i
+    `SELECT e.id AS id, e.display_name AS name FROM identifiers i
      JOIN entities e ON e.id = i.entity_id
      WHERE i.normalized = ? AND e.merged_into IS NULL
+     LIMIT 1`,
+  );
+
+  /**
+   * A name attached to the entity by something other than its display name.
+   *
+   * An entity first seen as a phone number is displayed as that phone number,
+   * and stays that way even after a contact card is linked to it, because
+   * `display_name` is set once at creation. The name identifier is right there
+   * on the same entity. Looking at it is the difference between a situation
+   * that reads "+15551230001" and one that reads like a person.
+   */
+  const named_ = db.prepare(
+    `SELECT value FROM identifiers
+     WHERE entity_id = ? AND kind = 'name'
+     ORDER BY LENGTH(value) DESC
      LIMIT 1`,
   );
 
@@ -669,13 +689,31 @@ export function nameHandles(db: DB, title: string): string {
       return handle;
     }
 
-    const row = lookup.get(handle.replace(/[^\d+]/g, "")) as { name: string } | undefined;
+    // E.164, via the same function that wrote the identifier. This used to
+    // strip punctuation by hand, which matched a handle iMessage had already
+    // written as +15551234567 and missed the identical number written on a
+    // contact card as (555) 123-4567. Two spellings, one person, no match, and
+    // the symptom was a phone number on screen next to a contact you could see
+    // in your own address book.
+    const key = looksLikePhone(handle) ? normalizePhone(handle) : handle.toLowerCase();
 
-    if (row === undefined || row.name.includes("@") || /^\+?\d/.test(row.name)) {
+    if (key === null) {
       return handle;
     }
 
-    return row.name;
+    const row = lookup.get(key) as { id: string; name: string } | undefined;
+
+    if (row === undefined) {
+      return handle;
+    }
+
+    if (!row.name.includes("@") && !/^\+?\d/.test(row.name)) {
+      return row.name;
+    }
+
+    const fallback = named_.get(row.id) as { value: string } | undefined;
+
+    return fallback === undefined ? handle : fallback.value;
   });
 
   // Three names and a count reads; eight names and a count does not.

@@ -42,7 +42,17 @@ import { issueCode, redeem } from "../store/pairing.js";
 import { credentialFor } from "../connectors/dispatch.js";
 import { CONNECTORS } from "../connectors/registry.js";
 import { listStreams } from "../store/streams.js";
-import { threadItemIds, topThreads } from "../store/relationships.js";
+import {
+  connectionsFor,
+  getThread,
+  threadItemIds,
+  threadNodes,
+  topThreads,
+} from "../store/relationships.js";
+import { NodeResolver, nodeKey } from "../store/nodes.js";
+import { nameHandles, nameTranscript } from "../store/entities.js";
+import { episodeItems, getEpisode } from "../store/episodes.js";
+import { getStream } from "../store/streams.js";
 import { listAccounts, saveAccount } from "../store/accounts.js";
 import { begin, complete } from "../connectors/google/remote-auth.js";
 import { authorize } from "../connectors/google/oauth.js";
@@ -176,6 +186,7 @@ export const API_PREFIXES: readonly string[] = [
   "interests",
   "items",
   "jobs",
+  "nodes",
   "overview",
   "pair",
   "people",
@@ -275,8 +286,29 @@ async function embedderOrUndefined() {
   }
 }
 
-function number(value: unknown, fallback: number): number {
+/**
+ * A query parameter as a number, or the default.
+ *
+ * The explicit null check is the whole function. `URLSearchParams.get` returns
+ * null for an absent parameter, `Number(null)` is 0, and 0 is finite, so the
+ * fallback never fired and every one of these endpoints answered a request with
+ * no query string as though the caller had asked for zero of everything.
+ *
+ * It failed silently and it failed as emptiness, which is the worst pairing
+ * available: `GET /situations` returned no situations, `GET /brief` composed a
+ * brief with a budget of nothing, `GET /jobs` listed no jobs. All of them look
+ * exactly like a store with nothing in it, so the natural conclusion is that
+ * Harbor has not found anything rather than that the query was wrong. Adding a
+ * `?limit=20` made it work, which is why it survived every manual test anybody
+ * ran with a URL they had typed out in full.
+ */
+export function number(value: unknown, fallback: number): number {
+  if (value === null || value === undefined || value === "") {
+    return fallback;
+  }
+
   const parsed = typeof value === "string" ? Number.parseInt(value, 10) : Number(value);
+
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
@@ -299,6 +331,15 @@ async function streamAsk(
     "content-type": "text/event-stream",
     "cache-control": "no-cache",
     connection: "keep-alive",
+    // For whatever is in front of this when Harbor is reached from a phone.
+    //
+    // `tailscale serve` streams correctly and does not need it. nginx buffers
+    // proxied responses by default and Cloudflare Tunnel has done the same,
+    // and a buffered event stream is the worst possible failure here: the
+    // answer arrives complete, at the end, after the person has decided it is
+    // broken. Meaningless to a proxy that does not read it, so it costs one
+    // header to not care which one is there.
+    "x-accel-buffering": "no",
     ...cors,
   });
 
@@ -876,6 +917,90 @@ async function route(
 
   // ---- situations ----
 
+  /**
+   * One situation, with why each thing is in it.
+   *
+   * The evidence is the point. A situation is a claim Harbor made about your
+   * life, assembled by rules you did not write, and the difference between that
+   * being useful and being unsettling is whether you can see what it was
+   * reading. `harbor why` has always printed this; nothing but a terminal could
+   * reach it.
+   *
+   * Links are restricted to pairs where both ends are inside the situation.
+   * `connectionsFor` returns every edge a node has, and half of them point at
+   * things that are not on screen, which reads as evidence for a claim nobody
+   * made.
+   */
+  if (method === "GET" && head === "situations" && segments[1] !== undefined) {
+    const thread = getThread(db, segments[1]);
+
+    if (thread === null || thread.principalId !== device.principalId) {
+      return missing();
+    }
+
+    const refs = threadNodes(db, thread.id);
+    const inside = new Set(refs.map((ref) => nodeKey(ref)));
+    const resolver = new NodeResolver(db);
+
+    const members = refs.flatMap((ref) => {
+      const node = resolver.node(ref);
+
+      if (node === null) {
+        return [];
+      }
+
+      const stream = getStream(db, node.streamId);
+
+      return [
+        {
+          ref: nodeKey(ref),
+          kind: node.kind,
+          source: stream?.connectorId ?? "unknown",
+          // A resolved name, not a handle. `+15551230001` makes somebody go and
+          // look up who that is, which is work Harbor already did when it
+          // resolved the entity.
+          title: nameHandles(db, node.title ?? "") || null,
+          // Enough to recognise the thing, not enough to be a reader. The
+          // detail view is for understanding why it is here; reading it is
+          // what asking about it is for.
+          preview: nameTranscript(db, node.text).slice(0, 240),
+          when: humanWhen(node.occurredAt, options.timezone),
+          at: node.occurredAt,
+        },
+      ];
+    });
+
+    const links = refs.flatMap((ref) =>
+      connectionsFor(db, ref)
+        .filter((connection) => inside.has(nodeKey(connection.to)))
+        .map((connection) => ({
+          from: nodeKey(ref),
+          to: nodeKey(connection.to),
+          kind: connection.kind,
+          confidence: connection.confidence,
+          evidence: connection.evidence,
+          also: connection.also,
+        })),
+    );
+
+    return ok({
+      id: thread.id,
+      title: thread.title,
+      summary: thread.summary,
+      titleSource: thread.titleSource,
+      kind: thread.kind,
+      state: thread.state,
+      startsAt: thread.startsAt,
+      endsAt: thread.endsAt,
+      itemCount: thread.itemCount,
+      sourceCount: thread.sourceCount,
+      sources: [...new Set(members.map((member) => member.source))],
+      members,
+      links,
+    });
+  }
+
+
   if (method === "GET" && head === "situations") {
     const days = number(query.get("days"), 0);
 
@@ -889,6 +1014,7 @@ async function route(
       situations: found.map((thread) => ({
         id: thread.id,
         title: thread.title,
+        summary: thread.summary,
         kind: thread.kind,
         startsAt: thread.startsAt,
         endsAt: thread.endsAt,
@@ -903,12 +1029,82 @@ async function route(
                 {
                   id: item.id,
                   kind: item.kind,
-                  title: item.title,
+                  title: nameHandles(db, item.title ?? "") || null,
                   when: humanWhen(item.occurredAt, options.timezone),
                 },
               ];
         }),
       })),
+    });
+  }
+
+  /**
+   * The contents of one node in a situation.
+   *
+   * Reading is the point of the drill-down. Knowing that a conversation is in a
+   * situation and why is half an answer; the other half is what was actually
+   * said, and until now that meant `harbor find` in a terminal.
+   *
+   * Two shapes behind one route, because the caller has a node reference and
+   * should not have to know that some of them are conversations. An episode
+   * returns its messages with speakers named; an item returns its body.
+   */
+  if (method === "GET" && head === "nodes" && segments[1] !== undefined) {
+    const [kind, id] = [segments[1], segments[2]];
+
+    if (id === undefined || (kind !== "item" && kind !== "episode")) {
+      return missing();
+    }
+
+    if (kind === "item") {
+      const item = getItem(db, id);
+
+      if (item === null) {
+        return missing();
+      }
+
+      return ok({
+        kind: "item",
+        id: item.id,
+        title: nameHandles(db, item.title ?? "") || null,
+        from: item.author === null ? null : nameHandles(db, item.author),
+        when: humanWhen(item.occurredAt, options.timezone),
+        body: nameTranscript(db, item.body ?? ""),
+      });
+    }
+
+    const episode = getEpisode(db, id);
+
+    if (episode === null) {
+      return missing();
+    }
+
+    const messages = episodeItems(db, id).flatMap((itemId) => {
+      const item = getItem(db, itemId);
+
+      return item === null
+        ? []
+        : [
+            {
+              id: item.id,
+              // Outbound is the only one worth naming specially. Everything
+              // else is somebody, and who it is is what the entity layer knows.
+              from:
+                item.direction === "outbound"
+                  ? "You"
+                  : nameHandles(db, item.author ?? "") || "Unknown",
+              when: humanWhen(item.occurredAt, options.timezone),
+              text: nameTranscript(db, item.body ?? ""),
+            },
+          ];
+    });
+
+    return ok({
+      kind: "episode",
+      id: episode.id,
+      title: nameHandles(db, episode.title ?? "") || null,
+      when: humanWhen(episode.startsAt, options.timezone),
+      messages,
     });
   }
 

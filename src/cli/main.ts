@@ -142,6 +142,7 @@ import { serveMcp } from "../surfaces/mcp.js";
 import { listDevices, pairDevice, revokeDevice } from "../store/devices.js";
 import { installInstructions, launchdPlist, systemdUnit } from "../kernel/service.js";
 import { entryPoint, packageVersion } from "../kernel/version.js";
+import { remoteInstructions, remoteStatus } from "../kernel/remote.js";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join, resolve as resolvePath } from "node:path";
 import type { ScheduledTask } from "../scheduler/schedule.js";
@@ -1216,7 +1217,7 @@ async function main(): Promise<number> {
   situations
     .command("rename")
     .argument("<id>", "situation id")
-    .argument("<title>", "what to call it")
+    .argument("<title>", 'what to call it, or "" to hand it back to Harbor')
     .description("Give a situation a name of your own")
     .action((id: string, title: string) => {
       const { db } = openDatabase();
@@ -1227,7 +1228,11 @@ async function main(): Promise<number> {
           return;
         }
 
-        logger.print("Renamed. No later pass will overwrite it.");
+        logger.print(
+          title.trim().length === 0
+            ? "Handed back. Harbor will name it on the next pass, and it can retire normally."
+            : "Renamed. No later pass will overwrite it.",
+        );
       } finally {
         db.close();
       }
@@ -3313,6 +3318,30 @@ async function main(): Promise<number> {
       }
     });
 
+  program
+    .command("resummarise")
+    .alias("resummarize")
+    .description("Forget every situation summary so the next naming pass rewrites them")
+    .action(() => {
+      // Summaries are only written where there is none, which is right for a
+      // pass that runs every fifteen minutes and wrong the day the prompt or
+      // the model changes. Without this, improving either does nothing to the
+      // fifty summaries already on disk and the only visible result is that
+      // nothing visibly changed.
+      const { db } = openDatabase();
+
+      try {
+        const cleared = db.prepare(`UPDATE threads SET summary = NULL`).run().changes;
+
+        logger.print(`Forgot ${plural(cleared, "summary", "summaries")}.`);
+        logger.print("");
+        logger.print("Rewrite them now with `harbor dev run name`, or leave it to the");
+        logger.print("next pulse.");
+      } finally {
+        db.close();
+      }
+    });
+
   dev
     .command("run")
     .argument("<task>", SCHEDULABLE.join(" | "))
@@ -3603,6 +3632,57 @@ async function main(): Promise<number> {
           logger.print("");
           logger.print("  security delete-generic-password -s harbor -a store-encryption-key");
           logger.print("  security add-generic-password -s harbor -a store-encryption-key -w <key>");
+        }
+      }
+    });
+
+  program
+    .command("remote")
+    .description("Reach Harbor from your phone, from anywhere")
+    .option("--port <port>", "the port Harbor is serving on", "8484")
+    .action(async (options: { port: string }) => {
+      const parsed = Number.parseInt(options.port, 10);
+      const port = Number.isFinite(parsed) ? parsed : 8484;
+      const status = await remoteStatus();
+
+      logger.print(
+        `Tailscale      ${
+          status.state === "served"
+            ? `up, publishing ${String(status.host)}`
+            : status.state === "not-served"
+              ? `up as ${String(status.host)}, publishing nothing`
+              : status.state === "logged-out"
+                ? "installed, not connected"
+                : status.state === "no-tailscale"
+                  ? "not installed"
+                  : "unrecognised"
+        }`,
+      );
+      logger.print(`Harbor         127.0.0.1:${String(port)}`);
+      logger.print("");
+
+      for (const line of remoteInstructions(status, port)) {
+        logger.print(line);
+      }
+
+      // Only once the path would actually work. A pairing code is single use
+      // and expires in ten minutes, so printing one alongside instructions
+      // that take longer than that to follow just burns it.
+      if (status.state === "served" && status.servedPort === port) {
+        const { db } = openDatabase();
+
+        try {
+          const code = issueCode(db, {
+            principalId: DEFAULT_PRINCIPAL,
+            scopes: ["read", "act"],
+            label: "remote",
+          });
+
+          logger.print("");
+          logger.print(`Code           ${code.code}`);
+          logger.print(`Expires        ${when(code.expiresAt)}`);
+        } finally {
+          db.close();
         }
       }
     });

@@ -48,20 +48,68 @@ it under its own agent.
 Check on it:
 
 ```
-launchctl list | grep harbor
+launchctl print gui/$(id -u)/com.harbor.daemon | head -20
 tail -f ~/.harbor/logs/harbor.log
 ```
 
+`launchctl list | grep harbor` gives a pid and an exit code and nothing else.
+`print` gives the program, its arguments, the last exit reason and where it is
+logging. Use `bootstrap` and `bootout` rather than `load` and `unload`: the old
+verbs report `Input/output error` for everything from an already-loaded job to a
+malformed plist, and in the first case load it anyway, so you see a failure and
+a running job and cannot tell which happened.
+
+## Turning it all off
+
+```
+./run.sh off
+```
+
+Harbor can be running in four places at once: a daemon you started by hand, the
+LaunchAgent, the Tailscale proxy publishing the port, and a sleep setting
+holding the machine awake for it. Killing the one you can see leaves the other
+three, and launchd restarts its copy thirty seconds later, which reads as Harbor
+refusing to die.
+
+That stops all four, then checks nothing is answering on 8484, which is a
+different claim from having signalled some processes. It touches no data.
+
+Note that two of them fight. `./run.sh local` binds `0.0.0.0` and the
+LaunchAgent binds `127.0.0.1` on the same port, so whichever starts second
+cannot bind, and stopping one takes the other's job down mid-pass. A job that
+failed with "the process running this stopped" is that. Every mode of `run.sh`
+stops everything first for this reason, but starting the agent by hand
+afterwards puts you back in the same place. Use one or the other.
+
+## The three modes
+
+```
+./run.sh local     build, verify, serve on this machine and your wifi
+./run.sh remote    build, verify, serve to your phone from anywhere
+./run.sh off       stop everything. Touches no data.
+```
+
+`local` and `remote` differ in one thing: what the daemon binds to. Local binds
+every interface so another device on your wifi can reach it directly. Remote
+binds loopback only and lets Tailscale carry the traffic, which is the whole
+reason no port is ever exposed. Each mode stops whatever the last one started.
+
 ## Reaching it from your phone
 
-[Tailscale](https://tailscale.com), on the free plan, then one command:
-
 ```
-tailscale serve --bg 8484
+harbor remote
 ```
 
-That publishes `https://<your-mac>.<your-tailnet>.ts.net` and proxies it to
-`127.0.0.1:8484`.
+That checks the whole path and prints whichever step is missing, one at a time:
+Tailscale not installed, installed but not connected, connected but publishing
+nothing, publishing the wrong port. Once all four are done it prints the URL and
+a pairing code.
+
+Underneath it is [Tailscale](https://tailscale.com) on the free plan plus one
+command, `tailscale serve --bg 8484`, which publishes
+`https://<your-mac>.<your-tailnet>.ts.net` and proxies it to `127.0.0.1:8484`.
+`harbor remote` does not run it for you, for the same reason `install-service`
+writes a plist and does not install it.
 
 What that buys, and why it is better than the alternatives:
 
@@ -82,10 +130,12 @@ forwarding does not deserve a sentence.
 Then, on the phone:
 
 1. Open the URL. You will be asked to pair.
-2. On the Mac: `harbor device code --act`
-3. Type the code. `--act` matters: without write scope the page can show what is
-   connected and cannot connect anything, and cannot start an operation.
-4. Share, then Add to Home Screen. It opens without browser chrome.
+2. Type the code `harbor remote` printed. It is single use and expires in ten
+   minutes; run it again for a new one.
+3. Share, then Add to Home Screen. It opens without browser chrome.
+
+The code carries write scope, which matters: without it the page can show what
+is connected and cannot connect anything, and cannot start an operation.
 
 The token is stored in that browser and survives refreshes. Revoke it with
 `harbor device revoke`, or from `harbor devices`.
@@ -102,7 +152,7 @@ If the page will not load at all:
 launchctl list | grep harbor          # is the job there, and what was its exit code
 tail -50 ~/.harbor/logs/harbor.log    # empty means it never started
 curl -s localhost:8484/health         # is the daemon itself alive
-tailscale serve status                # is the proxy still published
+harbor remote                         # is the path from outside still up
 ```
 
 The commonest cause of a service that loads and dies is an environment variable

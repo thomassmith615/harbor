@@ -112,6 +112,20 @@ WantedBy=default.target
 `;
 }
 
+/**
+ * bootstrap and bootout, not load and unload.
+ *
+ * `load` is deprecated and reports "Load failed: 5: Input/output error" for
+ * everything from an already-loaded job to a plist with a bad key, then loads
+ * it anyway in the first case. So you see a failure, run `launchctl list`, find
+ * the job running, and have no idea which of those happened. `bootstrap` says
+ * what was actually wrong.
+ *
+ * `launchctl list | grep harbor` has the same problem in miniature: it prints a
+ * pid and an exit status and nothing about why. `launchctl print` gives the
+ * program, the arguments, the last exit reason and the paths it is logging to,
+ * which is what somebody grepping for their service actually wanted.
+ */
 export function installInstructions(platform: NodeJS.Platform, path: string): readonly string[] {
   if (platform === "darwin") {
     return [
@@ -119,14 +133,17 @@ export function installInstructions(platform: NodeJS.Platform, path: string): re
       "",
       "Install it with:",
       `  cp ${path} ~/Library/LaunchAgents/com.harbor.daemon.plist`,
-      "  launchctl load ~/Library/LaunchAgents/com.harbor.daemon.plist",
+      "  launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.harbor.daemon.plist",
       "",
       "Check it with:",
-      "  launchctl list | grep harbor",
+      "  launchctl print gui/$(id -u)/com.harbor.daemon | head -20",
       "  tail -f ~/.harbor/logs/harbor.log",
       "",
       "Stop it with:",
-      "  launchctl unload ~/Library/LaunchAgents/com.harbor.daemon.plist",
+      "  launchctl bootout gui/$(id -u)/com.harbor.daemon",
+      "",
+      "Restart it after a code change:",
+      "  launchctl kickstart -k gui/$(id -u)/com.harbor.daemon",
       "",
       "Two things this cannot do for you:",
       "",

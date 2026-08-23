@@ -18,6 +18,7 @@ import { relate } from "../derive/relate.js";
 import { buildCommitments } from "../derive/commitments.js";
 import { extractPurchases } from "../derive/extract.js";
 import { proposeFacts } from "../derive/facts.js";
+import { nameSituations } from "../derive/name.js";
 import { runDetectors } from "../derive/brief.js";
 import { syncAccount } from "../connectors/dispatch.js";
 import { listAccounts } from "../store/accounts.js";
@@ -50,6 +51,7 @@ export const JOB_TASKS = [
   "extract",
   "notice",
   "signals",
+  "name",
   "backup",
   "reindex",
   "onboard",
@@ -110,6 +112,11 @@ const DECLARED: Readonly<Record<JobTask, readonly JobTask[]>> = {
   commit: ["onboard", "pulse", "sync", "recent", "backfill", "derive", "resolve", "commit"],
   extract: ["onboard", "pulse", "sync", "recent", "backfill", "extract"],
   notice: ["onboard", "pulse", "sync", "recent", "backfill", "derive", "notice"],
+  // Reads the situations relate has just settled and writes a sentence about
+  // each. Blocked by the pass that rewrites them and by ingest, and by nothing
+  // else: it is slow, it holds no locks anybody wants, and nothing downstream
+  // reads what it writes.
+  name: ["onboard", "pulse", "sync", "recent", "backfill", "relate", "name"],
   signals: [
     "onboard",
     "pulse",
@@ -572,6 +579,22 @@ async function run(db: DB, jobId: string, task: JobTask, context: JobContext): P
     );
   }
 
+  if (task === "name") {
+    const named = await nameSituations(db, {
+      principalId: context.principalId,
+      timezone: context.timezone,
+      shouldStop: () => stopped(db, jobId),
+      onNote: (message) => {
+        report(db, jobId, { note: message });
+      },
+    });
+
+    return (
+      `${String(named.written)} summarised, ${String(named.failed)} failed, ` +
+      `${String(named.considered)} were without one`
+    );
+  }
+
   if (task === "signals") {
     const embedder = await embedderOrNull();
 
@@ -641,6 +664,10 @@ async function run(db: DB, jobId: string, task: JobTask, context: JobContext): P
       "derive",
       "resolve",
       "relate",
+      // After relate, because relate is what clears a summary whose membership
+      // changed, and before signals, so anything that speaks is speaking about
+      // situations that have a sentence attached.
+      "name",
       "commit",
       "signals",
     ] as const) {
@@ -669,6 +696,7 @@ async function run(db: DB, jobId: string, task: JobTask, context: JobContext): P
       "derive",
       "resolve",
       "relate",
+      "name",
       "signals",
     ];
     const notes: string[] = [];

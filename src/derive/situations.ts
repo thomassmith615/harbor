@@ -64,6 +64,7 @@
  * every single day. Reopening is a decision, and it belongs to the person:
  * `harbor situations reopen <id>`.
  */
+import { setThreadSummary } from "../store/relationships.js";
 import { createHash, randomBytes } from "node:crypto";
 import { nodeKey } from "../store/nodes.js";
 import {
@@ -286,6 +287,13 @@ export function reconcileSituations(
       };
 
       saveThread(db, input);
+
+      // A summary describes a set of members. When that set changes the
+      // sentence is about something that no longer exists, so it goes, and the
+      // naming pass writes a new one on its next run.
+      if (membershipChanged) {
+        setThreadSummary(db, id, null);
+      }
     });
 
     return null;

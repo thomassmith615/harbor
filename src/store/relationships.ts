@@ -519,6 +519,41 @@ export function deleteThread(db: DB, id: string): void {
  * A derivation may change what is in a situation and what it is called; it may
  * not decide that something you dismissed is interesting again.
  */
+/**
+ * A written summary, and the rule that keeps it honest.
+ *
+ * Cleared rather than versioned. A summary describes a set of members, so the
+ * moment the membership changes the sentence is about something that no longer
+ * exists, and the safe state is having none. `reconcileSituations` already
+ * computes whether membership changed; it drops the summary when it did, and
+ * the naming pass fills the gap on its next run.
+ *
+ * The consequence worth accepting: a situation that grows shows no summary for
+ * up to fifteen minutes. That beats showing a sentence about a set of things
+ * that is not the set on the screen.
+ */
+export function setThreadSummary(db: DB, id: string, summary: string | null): void {
+  db.prepare(`UPDATE threads SET summary = ? WHERE id = ?`).run(summary, id);
+}
+
+/** Situations with no summary yet, newest and most salient first. */
+export function unsummarisedThreads(
+  db: DB,
+  principalId: string,
+  limit: number,
+): readonly Thread[] {
+  const rows = db
+    .prepare(
+      `SELECT * FROM threads
+       WHERE principal_id = ? AND summary IS NULL AND state = 'open'
+       ORDER BY salience DESC, ends_at DESC
+       LIMIT ?`,
+    )
+    .all(principalId, limit) as ThreadRow[];
+
+  return rows.map(hydrateThread);
+}
+
 export function setThreadState(
   db: DB,
   id: string,
@@ -532,11 +567,32 @@ export function setThreadState(
   return changed > 0;
 }
 
-/** A title the person wrote. Marked as theirs so no later pass overwrites it. */
+/**
+ * A title the person wrote, or handing it back.
+ *
+ * An empty title returns the situation to Harbor. That direction was missing,
+ * and the omission was not harmless: a user title is exempt from renaming and
+ * from retirement, so one rename made during a five-minute test pinned a real
+ * situation open under the word "Test" permanently, with no command that could
+ * undo it. Marking it derived again lets the next pass name it and lets it
+ * retire when the graph stops proposing it.
+ */
 export function renameThread(db: DB, id: string, title: string): boolean {
-  const changed = db
-    .prepare(`UPDATE threads SET title = ?, title_source = 'user', updated_at = ? WHERE id = ?`)
-    .run(title, Date.now(), id).changes;
+  const wanted = title.trim();
+
+  const changed =
+    wanted.length === 0
+      ? db
+          .prepare(
+            `UPDATE threads SET title_source = 'derived', summary = NULL, updated_at = ?
+             WHERE id = ?`,
+          )
+          .run(Date.now(), id).changes
+      : db
+          .prepare(
+            `UPDATE threads SET title = ?, title_source = 'user', updated_at = ? WHERE id = ?`,
+          )
+          .run(wanted, Date.now(), id).changes;
 
   return changed > 0;
 }
