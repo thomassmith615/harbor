@@ -17,41 +17,35 @@ import {
   replaceReferences,
   countPendingReferences,
 } from "../store/references.js";
+import { referencesIn } from "./anchors.js";
 import type { DB } from "../kernel/db.js";
 import type { ItemReference } from "../store/references.js";
 
-/** Bump to re-scan stored text. Independent of RELATIONSHIP_VERSION. */
-export const REFERENCE_VERSION = 1;
+/**
+ * Bump to re-scan stored text. Independent of RELATIONSHIP_VERSION.
+ *
+ * 2: flight numbers no longer require the word "flight" immediately in front of
+ * them. The old pattern read `Flight AA 4608` in an email body and read nothing
+ * at all from a calendar entry titled "Flight PHL to BOS" carrying `AA 1783`,
+ * because the route sat between the keyword and the code. That gap cost the
+ * strongest edge available on a real store: an airline confirmation and the
+ * calendar entry the airline generated share a flight number and were never
+ * once connected by it.
+ */
+export const REFERENCE_VERSION = 2;
 
 /** How much of an item's text is scanned. A reference that matters is near the top. */
 const SCAN_LIMIT = 4_000;
 
-const PATTERNS: readonly { readonly name: string; readonly pattern: RegExp }[] = [
-  // The keyword comes before the code, always. An earlier version looked for it
-  // afterwards with a lookahead and matched nothing at all, because "Flight AA
-  // 4608" puts the word first and so does every airline that has ever existed.
-  { name: "flight", pattern: /\b(?:flight|flt)\s*#?\s*([A-Z]{2}\s?\d{2,4})\b/gi },
-  {
-    name: "confirmation",
-    pattern:
-      /\b(?:confirmation|booking|reservation|order|itinerary)\s*(?:number|code|#|no\.?)?\s*:?\s*([A-Z0-9]{6,})\b/gi,
-  },
-  { name: "tracking", pattern: /\b(?:tracking|shipment)\s*#?\s*:?\s*(1Z[0-9A-Z]{16}|\d{10,22})\b/gi },
-  {
-    name: "meeting",
-    pattern: /\b(?:zoom\.us\/j\/(\d{9,})|meet\.google\.com\/([a-z]{3,}-[a-z]{3,}-[a-z]{3,}))/gi,
-  },
-];
-
 /**
- * Words that are not references even when a pattern captures them.
+ * References in one item.
  *
- * From a real failure: an email titled "Your trip confirmation" whose body
- * opened "Confirmation ABC7788XY" yielded the reference "CONFIRMATION", which
- * then matched every other confirmation email in the store.
+ * The patterns themselves now live in `derive/anchors.ts` and are shared with
+ * the story layer. Two copies of "what counts as an identifier" is exactly the
+ * kind of duplication that drifts: one of them gets improved, and afterwards
+ * the graph and the stories disagree about whether two things share a booking
+ * code, with nothing anywhere reporting a conflict.
  */
-const NOT_A_REFERENCE = /^(CONFIRMATION|BOOKING|RESERVATION|ITINERARY|ORDER|NUMBER)$/;
-
 export function extractReferences(
   itemId: string,
   title: string | null,
@@ -63,24 +57,11 @@ export function extractReferences(
     return [];
   }
 
-  const scannable = text.slice(0, SCAN_LIMIT);
-  const found = new Map<string, ItemReference>();
-
-  for (const { name, pattern } of PATTERNS) {
-    for (const match of scannable.matchAll(pattern)) {
-      const value = (match[1] ?? match[2] ?? "").replace(/\s+/g, "").toUpperCase();
-
-      // A reference contains a digit, is long enough to be arbitrary, and is
-      // not the English word that preceded it.
-      if (value.length < 5 || !/\d/.test(value) || NOT_A_REFERENCE.test(value)) {
-        continue;
-      }
-
-      found.set(`${name}:${value}`, { itemId, kind: name, value });
-    }
-  }
-
-  return [...found.values()];
+  return referencesIn(text.slice(0, SCAN_LIMIT)).map((reference) => ({
+    itemId,
+    kind: reference.kind,
+    value: reference.value,
+  }));
 }
 
 export interface ReferenceReport {

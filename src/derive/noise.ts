@@ -39,6 +39,15 @@ import type { DB } from "../kernel/db.js";
 const RECURRENCE_THRESHOLD = 5;
 
 /**
+ * How many times a calendar entry repeats before it is a series.
+ *
+ * Lower than the mail threshold because calendars are smaller and a weekly
+ * meeting only appears three or four times inside a six month window, while a
+ * newsletter appears fifty.
+ */
+const EVENT_RECURRENCE_THRESHOLD = 3;
+
+/**
  * Recurring reminders are one commitment, not one per occurrence.
  *
  * A daily reminder is a separate item per day, which is correct in the store
@@ -93,8 +102,56 @@ export class NoiseIndex {
   private readonly repeats = new Set<string>();
   private templateShapes = 0;
   private broadcastSenders = 0;
+  private readonly recurringEvents = new Set<string>();
 
   constructor(private readonly db: DB) {
+    // Recurring calendar entries.
+    //
+    // Template detection below is scoped to mail, because that is where it was
+    // needed first, and the gap went unnoticed until the story layer started
+    // reading the calendar properly: a standup that repeats every weekday is
+    // exactly as much of a template as a shipping notification, and left
+    // unmarked it became six separate "occasions" inside one trip week.
+    //
+    // Kept as its own set rather than folded into `templates` because the
+    // relationship graph has been shaken out against the current behaviour of
+    // `isTemplate`, and quietly widening it would change edges nobody asked to
+    // have changed.
+    const events = db
+      .prepare(
+        `SELECT id, title FROM items
+         WHERE kind = 'event' AND deleted_at IS NULL AND title IS NOT NULL`,
+      )
+      .all() as { id: string; title: string | null }[];
+
+    const eventsByTitle = new Map<string, string[]>();
+
+    for (const event of events) {
+      const key = (event.title ?? "").trim().toLowerCase();
+
+      if (key.length < 2) {
+        continue;
+      }
+
+      const seen = eventsByTitle.get(key);
+
+      if (seen === undefined) {
+        eventsByTitle.set(key, [event.id]);
+      } else {
+        seen.push(event.id);
+      }
+    }
+
+    for (const ids of eventsByTitle.values()) {
+      if (ids.length < EVENT_RECURRENCE_THRESHOLD) {
+        continue;
+      }
+
+      for (const id of ids) {
+        this.recurringEvents.add(id);
+      }
+    }
+
     const conversational = CONVERSATIONAL_CONNECTORS.map((id) => `'${id}'`).join(", ");
 
     // Conversational streams are excluded, and leaving them in was a bug worth
@@ -235,6 +292,20 @@ export class NoiseIndex {
 
   /** A recurring notification, or a repeat of a reminder. Not a graph node. */
   private readonly oneWayEpisodes = new Map<string, boolean>();
+
+  /**
+   * A calendar entry that repeats under the same name.
+   *
+   * Separate from `isTemplate` on purpose; see the constructor.
+   */
+  isRecurringEvent(itemId: string): boolean {
+    return this.recurringEvents.has(itemId);
+  }
+
+  /** Either kind of repetition. What the story layer asks. */
+  isRepeating(itemId: string): boolean {
+    return this.isTemplate(itemId) || this.isRecurringEvent(itemId);
+  }
 
   isTemplate(itemId: string): boolean {
     return this.templates.has(itemId) || this.repeats.has(itemId);

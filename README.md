@@ -186,6 +186,180 @@ called, which is why this reads under 1% of a mailbox.
 Individual stages live under `harbor dev <stage>` and exist for working on
 Harbor, not for using it.
 
+## Stories
+
+The graph below answers "are these two things connected". That turned out not to
+be the question. The question is "what happened", and the difference is not one
+of degree.
+
+A connected component of a similarity graph is single-linkage clustering, and
+single-linkage chains: A resembles B, B resembles C, and now A and C are one
+situation despite sharing nothing. Every guard against that — a forty node
+ceiling, a required spine kind, a two-source minimum — fights the symptom. On
+sparse data those guards throw away real stories; on dense data chaining happens
+underneath them anyway. Grabbing too much and grabbing too little are the same
+defect seen from two sides.
+
+So the unit changed. A **story** is not a component. It is a *frame* built around
+something that inherently defines an occasion — a journey, a calendar entry —
+plus everything that points at that frame's anchors. Membership is a claim about
+the story, never about another member, which is what makes chaining structurally
+impossible rather than merely bounded.
+
+```
+harbor stories             journeys and occasions, most salient first
+harbor stories show <id>   everything in one, in order, and why each part is in it
+harbor stories why <id>    what was considered and turned down, and on what grounds
+harbor presence [date]     where you are over time, and how sure Harbor is
+```
+
+**An anchor is a typed claim.** Not "these texts share a rare word" but: this
+happens at this place, over this span of days, carries this identifier, involves
+this person. `BOS`, `Boston` and `Logan` collapse to one place anchor; "the 20th
+through the 24th" becomes a span rather than being discarded as a bare number.
+The kind of an anchor says what it is worth, which is the distinction the old
+design could not express because topic overlap was the only evidence it had.
+`src/derive/anchors.ts`.
+
+**Admission needs two independent kinds of evidence, or one decisive one.** That
+single rule is the quality control. Shared vocabulary is one kind and is capped
+below the bar, so a node whose only claim is words in common can never get in,
+however many it shares. `src/derive/gather.ts`.
+
+**Position is evidence.** A reminder three hours before a departure is about the
+departure, and it shares no word with it — there is nothing in common to
+discover. `pack laptop` is admitted on where it sits. Under the old linker it was
+rejected by arithmetic: `tracks` required two content words of five or more
+characters from the reminder to appear in the other node, and "pack laptop"
+yields one.
+
+**Co-location is not evidence.** While you are in Boston, everything around you
+mentions Boston, so the place anchor stops discriminating at exactly the moment
+it looks strongest. A cold sales text mentioning the Boston area, sent mid-trip,
+scored "mentions Boston" plus "was said during it" and walked straight in. Both
+statements true, conclusion wrong. Mentioning the destination weeks beforehand
+is a real signal; mentioning it while standing there is small talk.
+
+**A frame learns who it is with.** A calendar entry for a flight has no
+attendees, so a trip starts out knowing where and when and nothing about who —
+and the person test, one of the strongest signals available, could never fire for
+the frame kind that needs it most. One round of enrichment fixes it: a
+conversation that joined on place and dates names the person you are going to
+see, and the frame then recognises the eight other conversations with them that
+said nothing geographic at all. People are harvested only from conversations, and
+only once, because iterating to a fixed point is how a frame walks off into the
+rest of the store one plausible hop at a time.
+
+**Presence is derived from journeys.** Intervals, not connections: away here,
+home from then, with each interval marked `observed` (a journey said so) or
+`inferred` (nothing said otherwise). The distinction is what makes it safe to
+build on — "no evidence of travel" and "evidence of no travel" are different
+claims and only one of them is true. `src/derive/presence.ts`.
+
+**Presence is a timeline, so it may not overlap itself.** Trips are allowed to
+overlap; a sequence of where somebody was is not. Two trips to London whose
+spans crossed produced two "away in London" intervals stacked on each other, one
+of which had to be wrong and neither of which said which. And an unfinished
+journey now expires: a single unpaired flight in April used to make every
+question after it answer "away in Boston" — in August, four months and several
+trips later — because the sentence never changed, nothing about it looked wrong.
+
+**One picture, not several.** A lakehouse weekend appeared under "what happened"
+and was absent from "where you have been" — two answers to one question. The
+cause was that each pass read the raw store and none read what the others had
+worked out. Three seams, all now closed:
+
+- *A name in a sentence reaches the person.* Harbor knew who a message was sent
+  to and nothing about who it was about, so "going up with Luther" contributed
+  the two people in the header and not Luther. The thread with the man actually
+  going was unreachable from the sentence naming him. `src/derive/mentions.ts`
+  indexes only name forms that point at exactly one person and are not ordinary
+  words — a wrong person is worse than no person.
+- *A frame learns where it was.* Gathering is where a frame finds out who it was
+  with and where it happened, and presence was being handed the frames as
+  *detected*, so anything learned came too late to count.
+- *Position bootstraps the thin ones.* A calendar entry reading "gute?" carries
+  almost no anchors, so nothing joins it on subject, so it never learns a
+  subject. Admitting the conversation immediately before it is the one move that
+  gets the first fact in the door — and everything the frame then knows, it
+  learned from that.
+
+The chain that results is the point: position pulls in one thread, that thread
+names a person, the person's name in a *different* thread pulls that one in, and
+that thread is the only thing in the store that says where any of it happened.
+
+**Completeness beats interestingness on the upcoming surface.** The story layer
+holds a high bar — two independent kinds of evidence, or one decisive one — and
+that bar is right for a claim about somebody's life assembled from scattered
+parts. It is wrong for "what is coming", and getting it wrong produced the worst
+failure Harbor has had: a calendar entry reading "Smith cousin weekend" two days
+away gathered no cross-source evidence, so it was not a story, so it appeared
+nowhere. The chat found it instantly. The one surface meant to stop somebody
+forgetting what is ahead was the one place it was invisible, *because* it was
+uncomplicated. `src/derive/upcoming.ts` is the calendar and the reminders, with
+stories folded in where they exist.
+
+**A wedding is not four things.** A welcome party on Friday, a ceremony on
+Saturday afternoon and a reception on Saturday evening were three stories plus a
+fourth called "Graber wedding". Contiguous occasions that share a place or a
+person now merge before gathering, so the combined frame gathers once against
+everything it is about.
+
+**A story may be named by a model, and only named.** `name.ts` refuses to
+generate titles, on the grounds that a model asked to name something produces a
+label that outruns the evidence. Sound — and it also produces "Concur Travel
+Itinerary" as the name of a work trip and "gute?" as the name of a weekend away.
+No amount of choosing a *different* existing string fixes it, because on a
+weekend containing three events none of the three strings names the weekend. So
+the boundary moved by exactly one step: a generated title is written with
+`title_source = 'model'`, no derivation reads it, no anchor is built from it, no
+scoring sees it, and the evidence sits underneath ready to contradict it.
+`src/derive/name-stories.ts`.
+
+**Evidence is layered, and the layers are not equal.** Three of them now, in
+descending authority, and which one speaks decides how strongly Harbor puts it:
+
+1. *A calendar journey.* A real departure time. Sets trip boundaries.
+2. *A booking.* Names the trip and can date one the calendar never saw — but
+   where both speak, the calendar wins. A confirmation is *about* a journey;
+   the calendar entry *is* one. Conflating the two put a Boston weekend on the
+   3rd because a fare rule in the email said August 17, and left three
+   overlapping trips for one weekend.
+3. *Something the person said.* "driving home" is how most journeys are
+   actually recorded: no booking, no calendar entry, no identifier. Signals
+   never build stories — a sentence should not reorganise a week — but they
+   close journeys that were left open and stand in for ones nobody recorded,
+   marked `inferred` on the timeline. Outbound messages only: an inbound
+   "driving home" is somebody else's evening. `src/derive/signals.ts`.
+
+**What a real store taught the layer**, none of which a fixture would have:
+
+- The same flight arrives more than once. The airline mails an itinerary, its
+  calendar feed publishes an entry, a second subscribed calendar publishes it
+  again. Each copy became an outbound and paired with a different copy of the
+  return, so one weekend in Chicago was three identical trips.
+- A return has to be *chosen*, not taken first. Ranking candidates by whether
+  they depart from where the outbound landed, inside a twenty-one day window,
+  is what stops a Boston weekend pairing with a leg twenty-seven days later.
+- Rarity stops meaning anything once the corpus is HTML. A trip listed `roboto`,
+  `montserrat` and `fb2605914` among its subjects: font stacks from an inline
+  stylesheet and a tracking id from a pixel, all genuinely rare, none a topic.
+- Automated senders are not noise, but a circular is. The rule that readmitted
+  airline confirmations also readmitted "Top 10 restaurants with a scenic view".
+  Mass mail now joins on an identifier or on being a booking, never on subject.
+- Timestamps predate the person. Presence began in October 2001, from a contact
+  card birthday. Five years is the horizon.
+- Nobody is in Boston three times at once. Overlapping trips to one place are a
+  contradiction, not a coincidence, and merge to the *narrowest* span — widening
+  on the least reliable member is how a four-day weekend became a week and then
+  reached further back for evidence that did not belong.
+
+The fixture in `src/fixtures/trip.ts` is the scenario written down: a packing
+reminder, a flight hours later, two months of texts working out an itinerary, and
+a flight back. Half its assertions are memberships it *forbids* — a newsletter, a
+recurring standup, and a stranger who mentions the destination during the trip
+week.
+
 ## The graph
 
 An edge joins two **nodes**, and a node is an item or an episode. That
@@ -308,6 +482,37 @@ that says only "haha ok" must connect to nothing.
 
 ## Known gaps
 
+- The story layer knows two frame kinds, trip and occasion. Orders and
+  deliveries are an obvious third and are not built; purchases already have
+  their own projection.
+- A journey needs a calendar entry, or mail that states a date. An airline
+  confirmation with no date in it and no matching calendar entry produces no
+  trip, because a leg without a departure time is not a leg.
+- Two destinations in one holiday are two trips. Without knowing intent that is
+  the honest reading, and it is still a limitation.
+- The gazetteer in `src/derive/places.ts` is hand-checked and US-centric.
+  Somewhere it does not name falls back to being an ordinary topic term, which
+  is the correct failure but is a quieter one than it looks.
+- Position is never sufficient on its own for a reminder. It was, to rescue
+  "pack laptop", and as a general rule it is indefensible: something is always
+  about to happen, so every note inside three days of any occasion joined it —
+  a zucchini brought home from work, a domain to check, somebody's birthday.
+  What distinguished the packing reminder was never proximity; it was that
+  packing is something you do *for* something.
+- Prep plus a familiar person is not evidence either. Somebody you text daily is
+  always "involved", so two weak positives multiplied into confident wrong
+  answers. Beyond the few hours where position speaks for itself, a conversation
+  has to say something about the occasion, not merely happen near it.
+- A plan is not a memory. The timeline had no notion of now, so a flight booked
+  for November sat in "where you have been" beside a weekend in August.
+- Conversations get two prep windows: inside fourteen hours, position admits
+  them alone; out to thirty-six, position counts but something must corroborate.
+  "Is evidence" and "is enough on its own" are different questions.
+- A period away inferred from text has no destination unless the sentence
+  happened to name one, so it shows as "somewhere else". Naming it would need
+  signals Harbor does not read: photo locations, where money was spent.
+- Stories and situations both exist and answer the same question differently.
+  That is deliberate for one milestone and should not survive two.
 - Household support is schema, custodian, visibility, and search scoping only.
   Entity resolution, commitments, detectors, and the digest all assume one
   person.

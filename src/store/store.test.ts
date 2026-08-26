@@ -16,7 +16,8 @@ import { recordSelfHandles, listSelfHandles } from "./entities.js";
 import { ensureStream } from "./streams.js";
 import { saveAccount } from "./accounts.js";
 import { Gate } from "../policy/gate.js";
-import { MIGRATIONS } from "./schema.js";
+import { MIGRATIONS, DEFAULT_PRINCIPAL } from "./schema.js";
+import { getStory, saveStory, storyMembers } from "./stories.js";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -28,6 +29,65 @@ before(() => {
 
 after(() => {
   store.close();
+});
+
+describe("migrations against a database that already has data", () => {
+  // Every migration test until now ran against an empty database, and every
+  // migration passed. Then a real store failed on the next command it ran with
+  // `FOREIGN KEY constraint failed`, because rebuilding a parent table is only
+  // safe when no child rows point at it -- and an empty database has none.
+  //
+  // A migration that touches a table with a foreign key needs a fixture that
+  // has rows in both.
+  test("rebuilding stories keeps its rows and its children", () => {
+    const store = openTestStore();
+
+    try {
+      saveStory(
+        store.db,
+        {
+          id: "sty_migration",
+          principalId: DEFAULT_PRINCIPAL,
+          kind: "trip",
+          title: "A name I chose",
+          titleSource: "user",
+          summary: null,
+          place: null,
+          spanStartsAt: 0,
+          spanEndsAt: 1,
+          startsAt: 0,
+          endsAt: 1,
+          sourceCount: 1,
+          salience: 0,
+          state: "dismissed",
+          firstSeenAt: 0,
+          lastChangedAt: 0,
+          nodeDigest: "d",
+          members: [{ ref: { kind: "item", id: "i1" }, role: "spine", score: 1, evidence: ["x"] }],
+        },
+        0,
+      );
+
+      const latest = MIGRATIONS[MIGRATIONS.length - 1];
+
+      assert.ok(latest !== undefined);
+
+      // Re-running the newest migration against populated tables is the same
+      // situation an existing store is in when it upgrades.
+      store.db.exec("BEGIN");
+      store.db.exec(latest);
+      store.db.exec("COMMIT");
+
+      const story = getStory(store.db, "sty_migration");
+
+      assert.equal(story?.title, "A name I chose", "a title somebody chose survives");
+      assert.equal(story?.titleSource, "user");
+      assert.equal(story?.state, "dismissed", "and so does a decision they made");
+      assert.equal(storyMembers(store.db, "sty_migration").length, 1, "children come back");
+    } finally {
+      store.close();
+    }
+  });
 });
 
 describe("the schema", () => {

@@ -294,7 +294,8 @@ export function upsertItem(db: DB, input: ItemUpsert): UpsertOutcome {
        references_version = NULL,
        episode_version = NULL,
        commitment_version = NULL,
-       projection_version = NULL`,
+       projection_version = NULL,
+       anchors_version = NULL`,
   ).run({
     id,
     accountId: input.accountId,

@@ -15,6 +15,8 @@ import { createEmbedder } from "../derive/embed/index.js";
 import { derive, reindex } from "../derive/pipeline.js";
 import { resolveEntities } from "../derive/entities.js";
 import { relate } from "../derive/relate.js";
+import { buildStories } from "../derive/stories.js";
+import { nameStories } from "../derive/name-stories.js";
 import { buildCommitments } from "../derive/commitments.js";
 import { extractPurchases } from "../derive/extract.js";
 import { proposeFacts } from "../derive/facts.js";
@@ -48,6 +50,8 @@ export const JOB_TASKS = [
   "derive",
   "resolve",
   "relate",
+  "stories",
+  "name-stories",
   "commit",
   "extract",
   "notice",
@@ -108,6 +112,14 @@ const DECLARED: Readonly<Record<JobTask, readonly JobTask[]>> = {
   // Relating asks "are these the same person" of the entity layer, so it must
   // not run while that layer is being rewritten.
   relate: ["onboard", "pulse", "sync", "recent", "backfill", "resolve", "relate", "signals"],
+  // Reads anchors, the calendar, and the entity layer, and writes its own
+  // tables. Blocked by ingest and by resolution for the same reason relate is:
+  // it asks who is on a conversation, and that answer must not be changing
+  // underneath it.
+  stories: ["onboard", "pulse", "sync", "recent", "backfill", "resolve", "stories"],
+  // Reads stories and writes only their title and summary. Blocked by the pass
+  // that builds them, and by itself.
+  "name-stories": ["onboard", "pulse", "sync", "stories", "name-stories"],
   // Reads reminders, episodes, and the calendar, and writes its own table.
   // Blocked by the passes that produce its inputs rather than by everything.
   commit: ["onboard", "pulse", "sync", "recent", "backfill", "derive", "resolve", "commit"],
@@ -624,6 +636,42 @@ async function run(db: DB, jobId: string, task: JobTask, context: JobContext): P
     );
   }
 
+  if (task === "stories") {
+    const outcome = buildStories(db, {
+      principalId: context.principalId,
+      timezone: context.timezone,
+      // Five years. A store carries stray timestamps from long before the
+      // person was using any of these accounts, and a journey detected in 2001
+      // is not a journey.
+      since: Date.now() - 1825 * 86_400_000,
+      shouldStop: () => stopped(db, jobId),
+      onProgress: (done, total) => {
+        report(db, jobId, { done, total });
+      },
+      onNote: (message) => {
+        report(db, jobId, { note: message });
+      },
+    });
+
+    return (
+      `${String(outcome.storiesWritten)} stories from ${String(outcome.trips)} journeys ` +
+      `and ${String(outcome.occasions)} occasions, ${String(outcome.crossSource)} cross-source`
+    );
+  }
+
+  if (task === "name-stories") {
+    const outcome = await nameStories(db, {
+      principalId: context.principalId,
+      timezone: context.timezone,
+      shouldStop: () => stopped(db, jobId),
+      onNote: (message) => {
+        report(db, jobId, { note: message });
+      },
+    });
+
+    return `${String(outcome.written)} stories named, ${String(outcome.failed)} failed`;
+  }
+
   if (task === "name") {
     const named = await nameSituations(db, {
       principalId: context.principalId,
@@ -709,6 +757,12 @@ async function run(db: DB, jobId: string, task: JobTask, context: JobContext): P
       "derive",
       "resolve",
       "relate",
+      // Stories read anchors and the calendar rather than the edge graph, so
+      // they do not depend on relate. Kept next to it anyway: both answer "what
+      // belongs together", and running them apart would let a surface show a
+      // story and a situation built from different snapshots of the store.
+      "stories",
+      "name-stories",
       // After relate, because relate is what clears a summary whose membership
       // changed, and before signals, so anything that speaks is speaking about
       // situations that have a sentence attached.
@@ -741,6 +795,8 @@ async function run(db: DB, jobId: string, task: JobTask, context: JobContext): P
       "derive",
       "resolve",
       "relate",
+      "stories",
+      "name-stories",
       "name",
       "signals",
     ];

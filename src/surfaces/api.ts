@@ -51,6 +51,9 @@ import {
 } from "../store/relationships.js";
 import { NodeResolver, nodeKey } from "../store/nodes.js";
 import { nameHandles, nameTranscript } from "../store/entities.js";
+import { getStory, storyMembers, topStories } from "../store/stories.js";
+import { presenceTimeline, describePlace } from "../derive/presence.js";
+import { upcoming } from "../derive/upcoming.js";
 import { episodeItems, getEpisode } from "../store/episodes.js";
 import { getStream } from "../store/streams.js";
 import { listAccounts, saveAccount } from "../store/accounts.js";
@@ -191,6 +194,7 @@ export const API_PREFIXES: readonly string[] = [
   "pair",
   "people",
   "policy",
+  "presence",
   "router",
   "schedules",
   "problems",
@@ -199,6 +203,8 @@ export const API_PREFIXES: readonly string[] = [
   "situations",
   "sources",
   "status",
+  "stories",
+  "upcoming",
 ];
 
 function isApiPath(path: string): boolean {
@@ -915,6 +921,164 @@ async function route(
     }
   }
 
+  /**
+   * What is ahead, completely.
+   *
+   * Not the story layer with a date filter. The calendar and the reminders,
+   * with stories folded in where they exist, because the one surface meant to
+   * stop somebody forgetting what is coming cannot be gated on whether Harbor
+   * found the thing interesting.
+   */
+  if (method === "GET" && head === "upcoming") {
+    const entries = upcoming(db, {
+      principalId: device.principalId,
+      days: number(query.get("days"), 120),
+      limit: number(query.get("limit"), 40),
+    });
+
+    return ok({
+      upcoming: entries.map((entry) => ({
+        kind: entry.kind,
+        title: nameHandles(db, entry.title),
+        startsAt: entry.startsAt,
+        endsAt: entry.endsAt,
+        place: entry.place,
+        storyId: entry.storyId,
+        summary: entry.summary,
+        memberCount: entry.memberCount,
+        sourceCount: entry.sourceCount,
+      })),
+    });
+  }
+
+  // ---- stories ----
+
+  /**
+   * One story, in the order it happened, with why each part is in it.
+   *
+   * The evidence is the whole point, and more so here than for situations. A
+   * situation says two things are connected; a story says "you went to Boston
+   * for the weekend and this is what that consisted of", which is a much larger
+   * claim to make about somebody's life on the strength of rules they did not
+   * write. Every member carries the sentences the pass actually used.
+   */
+  if (method === "GET" && head === "stories" && segments[1] !== undefined) {
+    const story = getStory(db, segments[1]);
+
+    if (story === null || story.principalId !== device.principalId) {
+      return missing();
+    }
+
+    const resolver = new NodeResolver(db);
+
+    const members = storyMembers(db, story.id).flatMap((member) => {
+      const node = resolver.node(member.ref);
+
+      if (node === null) {
+        return [];
+      }
+
+      const stream = getStream(db, node.streamId);
+
+      return [
+        {
+          ref: nodeKey(member.ref),
+          kind: node.kind,
+          role: member.role,
+          score: member.score,
+          evidence: member.evidence,
+          source: stream?.connectorId ?? "unknown",
+          title: nameHandles(db, node.title ?? "") || null,
+          // Names, not handles, and resolved before the slice so a truncated
+          // preview cannot end mid-substitution. A phone number on screen is a
+          // lookup the entity layer already did and then threw away.
+          preview: nameHandles(db, nameTranscript(db, node.text)).slice(0, 240),
+          when: humanWhen(node.occurredAt, options.timezone),
+          at: node.occurredAt,
+        },
+      ];
+    });
+
+    members.sort((a, b) => a.at - b.at);
+
+    return ok({
+      id: story.id,
+      kind: story.kind,
+      title: story.title,
+      titleSource: story.titleSource,
+      summary: story.summary,
+      place: story.place === null ? null : describePlace(story.place),
+      state: story.state,
+      spanStartsAt: story.spanStartsAt,
+      spanEndsAt: story.spanEndsAt,
+      startsAt: story.startsAt,
+      endsAt: story.endsAt,
+      memberCount: story.memberCount,
+      sourceCount: story.sourceCount,
+      sources: [...new Set(members.map((member) => member.source))],
+      members,
+    });
+  }
+
+  if (method === "GET" && head === "stories") {
+    const days = number(query.get("days"), 0);
+    const tense = query.get("tense");
+
+    const found = topStories(db, device.principalId, {
+      limit: number(query.get("limit"), 12),
+      minSources: number(query.get("minSources"), 2),
+      ...(days > 0 ? { since: Date.now() - days * 86_400_000 } : {}),
+      ...(tense === "past" || tense === "upcoming" ? { tense } : {}),
+    });
+
+    return ok({
+      stories: found.map((story) => ({
+        id: story.id,
+        kind: story.kind,
+        title: story.title,
+        place: story.place === null ? null : describePlace(story.place),
+        spanStartsAt: story.spanStartsAt,
+        spanEndsAt: story.spanEndsAt,
+        startsAt: story.startsAt,
+        memberCount: story.memberCount,
+        sourceCount: story.sourceCount,
+      })),
+    });
+  }
+
+  /**
+   * Where the person has been.
+   *
+   * Each interval says what it is based on, and the surface is expected to show
+   * that. "Home" derived from a return flight and "home" derived from nobody
+   * having mentioned going anywhere are different claims, and a timeline that
+   * renders them identically is lying by omission.
+   */
+  if (method === "GET" && head === "presence") {
+    const days = number(query.get("days"), 365);
+
+    const tense = query.get("tense");
+
+    const timeline = presenceTimeline(db, device.principalId, {
+      since: Date.now() - days * 86_400_000,
+      limit: number(query.get("limit"), 60),
+      ...(tense === "past" || tense === "future" ? { tense } : {}),
+    });
+
+    return ok({
+      presence: timeline.map((interval) => ({
+        tense: interval.tense,
+        storyId: interval.storyId,
+        startsAt: interval.startsAt,
+        endsAt: interval.endsAt,
+        state: interval.state,
+        basis: interval.basis,
+        place: describePlace(interval.place),
+        evidence: interval.evidence,
+      })),
+    });
+  }
+
   // ---- situations ----
 
   /**
@@ -963,7 +1127,10 @@ async function route(
           // Enough to recognise the thing, not enough to be a reader. The
           // detail view is for understanding why it is here; reading it is
           // what asking about it is for.
-          preview: nameTranscript(db, node.text).slice(0, 240),
+          // Names, not handles, and resolved before the slice so a truncated
+          // preview cannot end mid-substitution. A phone number on screen is a
+          // lookup the entity layer already did and then threw away.
+          preview: nameHandles(db, nameTranscript(db, node.text)).slice(0, 240),
           when: humanWhen(node.occurredAt, options.timezone),
           at: node.occurredAt,
         },

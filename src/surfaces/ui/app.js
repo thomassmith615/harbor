@@ -517,14 +517,25 @@ let noticed = null;
 
 async function loadNoticed() {
   try {
-    const [situations, digest] = await Promise.all([
+    const [situations, digest, stories, presence, recent] = await Promise.all([
       json("/situations?limit=20"),
       json("/digest").catch(() => ({ digest: null })),
+      json("/upcoming?days=180&limit=40").catch(() => ({ upcoming: [] })),
+      json("/presence?days=900&limit=60").catch(() => ({ presence: [] })),
+      json("/stories?limit=30&minSources=1&tense=past").catch(() => ({ stories: [] })),
     ]);
 
-    noticed = { situations: situations.situations ?? [], digest: digest.digest ?? null };
+    noticed = {
+      situations: situations.situations ?? [],
+      digest: digest.digest ?? null,
+      upcoming: stories.upcoming ?? [],
+      presence: presence.presence ?? [],
+      past: recent.stories ?? [],
+    };
   } catch (error) {
-    if (error.message !== "unpaired") noticed = { situations: [], digest: null, error: error.message };
+    if (error.message !== "unpaired") {
+      noticed = { situations: [], digest: null, upcoming: [], presence: [], error: error.message };
+    }
   }
 
   if (view === "noticed") renderNoticed();
@@ -552,24 +563,301 @@ function renderNoticed() {
     stage.append(card);
   }
 
-  stage.append(el("div", "section-title", "Situations"));
+  // Three sections, in the order somebody actually needs them.
+  //
+  // Harbor is for somebody who forgets both what happened and what is coming,
+  // and those two failures want different treatment. Forgetting the past is
+  // answerable on demand -- you ask, and the chat searches. Forgetting the
+  // future is not: nothing prompts you to ask about a thing you do not
+  // remember exists.
+  const all = noticed.presence ?? [];
+  const ahead = noticed.upcoming ?? [];
 
-  if (noticed.situations.length === 0) {
+  stage.append(el("div", "section-title", "Coming up"));
+
+  if (ahead.length === 0) {
     stage.append(
+      el("p", "empty", noticed.error ?? "Nothing on the calendar that Harbor can see."),
+    );
+  }
+
+  for (const entry of ahead) {
+    stage.append(upcomingCard(entry));
+  }
+
+  // Travel, all of it, as one condensed strip: where you have been, where you
+  // are now, where you are going. Kept apart from the cards because a trip is
+  // not a thing to do -- it is the shape of a week, and reading the whole run
+  // at a glance is the point.
+  const travel = all.filter((interval) => interval.state === "away");
+
+  if (travel.length > 0) {
+    stage.append(el("div", "section-title", "Travel"));
+    stage.append(presenceStrip(travel));
+  }
+
+  // Everything behind you, most recent first. Situations are folded in here
+  // rather than given their own list: they are the older, weaker answer to the
+  // same question, and showing both meant the same weekend appeared twice.
+  const done = noticed.past ?? [];
+
+  if (done.length > 0 || noticed.situations.length > 0) {
+    stage.append(el("div", "section-title", "Past"));
+  }
+
+  for (const story of [...done].sort((a, b) => b.spanStartsAt - a.spanStartsAt)) {
+    stage.append(storyCard(story, {}));
+  }
+
+  if (noticed.situations.length > 0) {
+    const details = el("details", "past-fold");
+
+    details.append(el("summary", null, `Situations (${noticed.situations.length})`));
+
+    for (const situation of noticed.situations) {
+      details.append(situationCard(situation));
+    }
+
+    stage.append(details);
+  }
+}
+
+/**
+ * A run of intervals as bands.
+ *
+ * Travel bands are buttons when a story was assembled for them, so the timeline
+ * and the stories are one surface rather than two lists to join up by eye.
+ */
+function presenceStrip(intervals) {
+  const strip = el("div", "presence-strip");
+
+  for (const interval of intervals) {
+    const clickable = interval.storyId != null;
+    const band = el(clickable ? "button" : "div", "presence-band " + interval.state);
+
+    if (clickable) {
+      band.type = "button";
+      band.classList.add("linked");
+      band.addEventListener("click", () => openStory(interval.storyId));
+    }
+
+    band.append(el("span", "presence-place", interval.place));
+
+    // An open-ended interval ends "now" only if it has actually started.
+    //
+    // The old label said "now" for any interval with no end, which produced
+    // "Philadelphia Sep 14 - now" on a screen being read in August: an interval
+    // that starts in the future cannot end in the present, and the sentence
+    // reads as though Harbor has lost track of what day it is.
+    const openEnd = interval.tense === "future" ? "onwards" : "now";
+
+    band.append(
       el(
-        "div",
-        "empty",
-        noticed.error ??
-          "Nothing yet. A situation needs things from two different sources that " +
-            "turn out to be about each other, so this fills in as Harbor syncs.",
+        "span",
+        "presence-when",
+        shortDay(interval.startsAt) +
+          " \u2013 " +
+          (interval.endsAt === null ? openEnd : shortDay(interval.endsAt)),
       ),
     );
+
+    // Observed and inferred are different claims. A timeline that renders them
+    // identically is lying by omission, so the guess says so.
+    if (interval.basis === "inferred") {
+      band.append(el("span", "presence-basis", "assumed"));
+    }
+
+    band.title = interval.evidence;
+    strip.append(band);
+  }
+
+  return strip;
+}
+
+function shortDay(at) {
+  return new Date(at).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+function untilText(at) {
+  const days = Math.round((at - Date.now()) / 86400000);
+
+  if (days <= 0) return "today";
+  if (days === 1) return "tomorrow";
+  if (days < 14) return "in " + days + " days";
+
+  return "in " + Math.round(days / 7) + " weeks";
+}
+
+/**
+ * One thing that is coming.
+ *
+ * Backed by a story when Harbor assembled one, and by a bare calendar entry or
+ * reminder when it did not. The second case is the one that matters: a weekend
+ * away two days from now with nothing else attached was invisible before,
+ * precisely because it was uncomplicated.
+ */
+function upcomingCard(entry) {
+  const card = el(entry.storyId ? "button" : "div", "card story kind-" + entry.kind);
+
+  if (entry.storyId) {
+    card.type = "button";
+    card.addEventListener("click", () => openStory(entry.storyId));
+  }
+
+  const head = el("div", "card-head");
+  head.append(el("h3", "card-title", entry.title));
+  head.append(el("span", "card-until", untilText(entry.startsAt)));
+  card.append(head);
+
+  const when =
+    entry.endsAt !== null && entry.endsAt - entry.startsAt > 20 * 3600000
+      ? shortDay(entry.startsAt) + " \u2013 " + shortDay(entry.endsAt)
+      : shortDay(entry.startsAt);
+
+  card.append(el("p", "card-sub", when + (entry.place ? " \u00b7 " + entry.place : "")));
+
+  if (entry.summary) {
+    card.append(el("p", "card-summary", entry.summary));
+  }
+
+  const badges = el("div", "badges");
+  badges.append(el("span", "badge badge-kind", entry.kind));
+
+  if (entry.sourceCount > 1) {
+    badges.append(el("span", "badge badge-count", entry.sourceCount + " sources"));
+  }
+
+  card.append(badges);
+
+  return card;
+}
+
+function storyCard(story, options) {
+  const card = el("button", "card story");
+  card.type = "button";
+
+  const head = el("div", "card-head");
+  head.append(el("h3", "card-title", story.title ?? "Untitled"));
+
+  // How long you have. The single most useful thing on the card for somebody
+  // who forgets that a thing is coming at all.
+  if (options && options.countdown) {
+    head.append(el("span", "card-until", untilText(story.spanStartsAt)));
+  }
+
+  card.append(head);
+
+  card.append(
+    el(
+      "p",
+      "card-sub",
+      shortDay(story.spanStartsAt) +
+        " \u2013 " +
+        shortDay(story.spanEndsAt) +
+        (story.place ? " \u00b7 " + story.place : ""),
+    ),
+  );
+
+  const badges = el("div", "badges");
+
+  badges.append(el("span", "badge badge-count", story.sourceCount + " sources"));
+  badges.append(el("span", "badge", story.memberCount + " things"));
+
+  // How far back the story reaches beyond the occasion itself. A trip that was
+  // being talked about two months earlier is the whole point of the layer, and
+  // it is invisible from the dates on the trip alone.
+  const lead = Math.round((story.spanStartsAt - story.startsAt) / 86400000);
+
+  if (lead > 2) {
+    badges.append(el("span", "badge", "planned " + lead + "d ahead"));
+  }
+
+  if (story.summary) {
+    card.append(el("p", "card-summary", story.summary));
+  }
+
+  card.append(badges);
+  card.addEventListener("click", () => openStory(story.id));
+
+  return card;
+}
+
+async function openStory(id) {
+  sheet("Loading\u2026", (body) => {
+    body.append(el("p", null, "Reading the evidence."));
+  });
+
+  let detail;
+
+  try {
+    detail = await json("/stories/" + id);
+  } catch (error) {
+    sheet("Could not open it", (body) => {
+      body.append(el("p", null, error.message));
+    });
     return;
   }
 
-  for (const situation of noticed.situations) {
-    stage.append(situationCard(situation));
-  }
+  sheet(detail.title ?? "Story", (body) => {
+    const badges = el("div", "badges");
+
+    for (const source of detail.sources) {
+      badges.append(el("span", "badge", source));
+    }
+
+    body.append(badges);
+
+    body.append(
+      el(
+        "p",
+        "sheet-summary",
+        shortDay(detail.spanStartsAt) +
+          " \u2013 " +
+          shortDay(detail.spanEndsAt) +
+          (detail.place ? " \u00b7 " + detail.place : ""),
+      ),
+    );
+
+    const spine = el("div", "spine");
+
+    for (const member of detail.members) {
+      const node = el("div", "node role-" + member.role);
+
+      const head = el("div", "node-head");
+      head.append(el("span", "node-title", member.title ?? member.kind));
+      head.append(el("span", "badge", member.source));
+      head.append(el("span", "node-when", member.when));
+      node.append(head);
+
+      // The role, when it is not the ordinary one. "Preparation" is what makes
+      // a reminder to pack a laptop legible as part of a trip rather than a
+      // stray task that happened to be nearby.
+      if (member.role !== "evidence") {
+        node.append(el("div", "node-role", member.role));
+      }
+
+      if (member.preview) {
+        node.append(el("div", "node-preview", member.preview));
+      }
+
+      // Why this is here, attached to the thing rather than collected in a
+      // footnote. These are the sentences the pass actually used to decide,
+      // not a description written afterwards.
+      if (member.evidence.length > 0) {
+        const why = el("div", "node-why");
+
+        for (const line of member.evidence) {
+          why.append(el("div", "why-line", line));
+        }
+
+        node.append(why);
+      }
+
+      spine.append(node);
+    }
+
+    body.append(spine);
+  });
 }
 
 function situationCard(situation) {

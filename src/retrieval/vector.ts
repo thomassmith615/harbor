@@ -49,12 +49,36 @@ export interface VectorIndex {
   rebuild(model: string, pipelineVersion: number): number;
 }
 
-let extensionLoaded: boolean | null = null;
+/**
+ * Whether the binary exists at all. A process-wide fact.
+ */
+let extensionAvailable: boolean | null = null;
 
-/** Loads sqlite-vec once per process. Failure is a downgrade, not an error. */
+/**
+ * Which connections have actually had it loaded. A per-connection fact.
+ *
+ * These were one variable, and conflating them is a real bug rather than a
+ * tidiness point: a loadable extension attaches to a *connection*, not to a
+ * process. Once any connection had loaded it, every later connection was told
+ * it was available and none of them had it, so the first vector query on a
+ * second connection failed with `no such module: vec0` -- and it failed after
+ * reporting the fast path was in use, so it did not degrade to the scan path
+ * either. It went unnoticed because Harbor almost always opens one connection;
+ * it surfaces the moment anything opens a second, which a test run does and an
+ * API server alongside a job runner would.
+ *
+ * Weak, so a closed database is not kept alive by having been indexed.
+ */
+const loadedOn = new WeakSet<object>();
+
+/** Loads sqlite-vec per connection. Failure is a downgrade, not an error. */
 function tryLoadExtension(db: DB): boolean {
-  if (extensionLoaded !== null) {
-    return extensionLoaded;
+  if (extensionAvailable === false) {
+    return false;
+  }
+
+  if (loadedOn.has(db as unknown as object)) {
+    return true;
   }
 
   try {
@@ -64,12 +88,19 @@ function tryLoadExtension(db: DB): boolean {
     const require = createRequire(import.meta.url);
     const vec = require("sqlite-vec") as { load(database: unknown): void };
     vec.load(db);
-    extensionLoaded = true;
+    extensionAvailable = true;
+    loadedOn.add(db as unknown as object);
   } catch {
-    extensionLoaded = false;
+    // A failure here can mean the binary is missing, or that this particular
+    // connection refused it. Only the first is worth remembering process-wide.
+    if (extensionAvailable === null) {
+      extensionAvailable = false;
+    }
+
+    return false;
   }
 
-  return extensionLoaded;
+  return true;
 }
 
 const VEC_TABLE = "vec_chunks";

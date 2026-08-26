@@ -30,6 +30,19 @@ import {
   setThreadState,
 } from "../store/relationships.js";
 import { explain, relate } from "../derive/relate.js";
+import { buildStories, explainStory } from "../derive/stories.js";
+import { nameStories } from "../derive/name-stories.js";
+import { nameHandles } from "../store/entities.js";
+import { presenceAt, presenceTimeline, describePresence, describePlace } from "../derive/presence.js";
+import { clearAnchors } from "../store/anchors.js";
+import {
+  clearStories,
+  getStory,
+  renameStory,
+  setStoryState,
+  storyMembers,
+  topStories,
+} from "../store/stories.js";
 import { getEpisode, episodeItems } from "../store/episodes.js";
 import { searchEpisodes } from "../retrieval/episodes.js";
 import { segmentEpisodes } from "../derive/episodes.js";
@@ -1127,6 +1140,8 @@ async function main(): Promise<number> {
     .option("--days <days>", "only those active in the last N days")
     .option("--new", "only those whose membership changed in the last day")
     .option("--all", "include resolved and dismissed")
+    .option("--upcoming", "only what is still ahead")
+    .option("--past", "only what has already happened")
     .action((options: { limit: string; days?: string; new?: boolean; all?: boolean }) => {
       const { db } = openDatabase();
 
@@ -2160,6 +2175,393 @@ async function main(): Promise<number> {
           logger.print("");
           logger.print(`${footer} \`--linked\` for only what connected.`);
         }
+      } finally {
+        db.close();
+      }
+    });
+
+  // ---- stories -----------------------------------------------------------
+
+  const stories = program
+    .command("stories")
+    .description("What happened: journeys and occasions, with everything that belongs to them");
+
+  stories
+    .command("list", { isDefault: true })
+    .description("Stories, most salient first")
+    .option("-n, --limit <count>", "how many", "10")
+    .option("--kind <kind>", "trip or occasion")
+    .option("--all", "include resolved and dismissed")
+    .option("--upcoming", "only what is still ahead")
+    .option("--past", "only what has already happened")
+    .option("--min-sources <count>", "only those spanning at least this many sources", "1")
+    .action((options: {
+      limit: string;
+      kind?: string;
+      all?: boolean;
+      minSources: string;
+      upcoming?: boolean;
+      past?: boolean;
+    }) => {
+      const { db } = openDatabase();
+
+      try {
+        const limit = Number.parseInt(options.limit, 10);
+        const minSources = Number.parseInt(options.minSources, 10);
+
+        const found = topStories(db, DEFAULT_PRINCIPAL, {
+          limit: Number.isFinite(limit) ? limit : 10,
+          minSources: Number.isFinite(minSources) ? minSources : 1,
+          ...(options.kind === undefined ? {} : { kind: options.kind }),
+          ...(options.all === true
+            ? { states: ["open", "resolved", "dismissed"] as const }
+            : {}),
+          ...(options.upcoming === true
+            ? { tense: "upcoming" as const }
+            : options.past === true
+              ? { tense: "past" as const }
+              : {}),
+        });
+
+        if (found.length === 0) {
+          logger.print("No stories yet.");
+          logger.print("Needs `harbor dev stories` to have run, and a calendar connected.");
+          return;
+        }
+
+        for (const story of found) {
+          const mark = story.state === "open" ? "" : `  [${story.state}]`;
+          const where = story.place === null ? "" : `  ${describePlace(story.place)}`;
+
+          logger.print(`${story.title ?? "(unnamed)"}${mark}${where}`);
+          logger.print(
+            `  ${story.kind}  ${String(story.memberCount)} things across ` +
+              `${String(story.sourceCount)} sources`,
+          );
+          logger.print(`  ${when(story.spanStartsAt)} to ${when(story.spanEndsAt)}`);
+          logger.print(`  ${story.id}`);
+          logger.print("");
+        }
+      } finally {
+        db.close();
+      }
+    });
+
+  stories
+    .command("show")
+    .argument("<id>", "story id")
+    .description("Everything in one story, in the order it happened, and why each part is in it")
+    .action((id: string) => {
+      const { db } = openDatabase();
+
+      try {
+        const story = getStory(db, id);
+
+        if (story === null) {
+          logger.warn(`no story ${id}`);
+          return;
+        }
+
+        logger.print(story.title ?? "(unnamed)");
+        logger.print(
+          `${story.kind}${story.place === null ? "" : ` to ${describePlace(story.place)}`}, ` +
+            `${when(story.spanStartsAt)} to ${when(story.spanEndsAt)}`,
+        );
+        logger.print(
+          `${String(story.memberCount)} things across ${String(story.sourceCount)} sources, ` +
+            `first talked about ${when(story.startsAt)}`,
+        );
+        logger.print("");
+
+        const members = [...storyMembers(db, id)];
+        const times = new Map<string, number>();
+
+        for (const member of members) {
+          times.set(nodeKey(member.ref), summarize(db, member.ref)?.occurredAt ?? 0);
+        }
+
+        members.sort((a, b) => (times.get(nodeKey(a.ref)) ?? 0) - (times.get(nodeKey(b.ref)) ?? 0));
+
+        for (const member of members) {
+          const node = summarize(db, member.ref);
+
+          if (node === null) {
+            continue;
+          }
+
+          const size = member.ref.kind === "episode" ? ` (${String(node.itemIds.length)} messages)` : "";
+
+          // A resolved name, not a handle. "+13392047146" makes somebody go and
+          // look up who that is, which is work the entity layer already did.
+          const title = nameHandles(db, node.title ?? "");
+
+          logger.print(
+            `${when(node.occurredAt).padEnd(24)} ${member.role.padEnd(12)} ` +
+              `${title.slice(0, 44)}${size}`,
+          );
+
+          for (const line of member.evidence) {
+            logger.print(`    ${line}`);
+          }
+
+          logger.print(`    ${nodeKey(member.ref)}`);
+        }
+      } finally {
+        db.close();
+      }
+    });
+
+  stories
+    .command("why")
+    .argument("<id>", "story id")
+    .description("What was considered for a story and turned down, and on what grounds")
+    .action((id: string) => {
+      const { db } = openDatabase();
+
+      try {
+        const explanation = explainStory(db, id, {
+          principalId: DEFAULT_PRINCIPAL,
+          timezone: timezone(),
+        });
+
+        if (explanation === null) {
+          logger.warn(`no story ${id}, or its frame no longer exists`);
+          return;
+        }
+
+        logger.print(`${explanation.frame.title ?? "(unnamed)"}`);
+        logger.print("");
+        logger.print("What it is anchored on:");
+
+        for (const anchor of explanation.frame.anchors.slice(0, 20)) {
+          logger.print(`  ${anchor.kind.padEnd(8)} ${anchor.display}`);
+        }
+
+        logger.print("");
+        logger.print("Considered and turned down:");
+
+        if (explanation.rejected.length === 0) {
+          logger.print("  nothing scored above zero that was not taken.");
+        }
+
+        for (const rejection of explanation.rejected) {
+          const node = summarize(db, rejection.ref);
+
+          logger.print(
+            `  ${rejection.score.toFixed(2)}  ` +
+              `${nameHandles(db, node?.title ?? "").slice(0, 44).padEnd(46)}${rejection.reason}`,
+          );
+
+          for (const contribution of rejection.contributions) {
+            logger.print(`        ${contribution.evidence}`);
+          }
+        }
+      } finally {
+        db.close();
+      }
+    });
+
+  for (const [verb, state, said] of [
+    ["resolve", "resolved", "Marked resolved"],
+    ["dismiss", "dismissed", "Dismissed"],
+    ["reopen", "open", "Reopened"],
+  ] as const) {
+    stories
+      .command(verb)
+      .argument("<id>", "story id")
+      .description(
+        verb === "reopen" ? "Put a closed story back in play" : `Mark a story ${state}`,
+      )
+      .action((id: string) => {
+        const { db } = openDatabase();
+
+        try {
+          if (!setStoryState(db, id, state)) {
+            logger.warn(`no story ${id}`);
+            return;
+          }
+
+          logger.print(`${said}.`);
+        } finally {
+          db.close();
+        }
+      });
+  }
+
+  stories
+    .command("rename")
+    .argument("<id>", "story id")
+    .argument("<title>", 'what to call it, or "" to hand it back to Harbor')
+    .description("Give a story a name of your own")
+    .action((id: string, title: string) => {
+      const { db } = openDatabase();
+
+      try {
+        if (!renameStory(db, id, title)) {
+          logger.warn(`no story ${id}`);
+          return;
+        }
+
+        logger.print(
+          title.trim().length === 0
+            ? "Handed back. Harbor will name it on the next pass."
+            : "Renamed. No later pass will overwrite it.",
+        );
+      } finally {
+        db.close();
+      }
+    });
+
+  program
+    .command("presence")
+    .argument("[when]", "a date, or nothing for the whole timeline")
+    .description("Where you are, over time, and how confident Harbor is about it")
+    .action((at: string | undefined) => {
+      const { db } = openDatabase();
+
+      try {
+        if (at !== undefined) {
+          const parsed = Date.parse(at);
+
+          if (Number.isNaN(parsed)) {
+            logger.warn(`could not read "${at}" as a date`);
+            return;
+          }
+
+          const answer = presenceAt(db, DEFAULT_PRINCIPAL, parsed);
+
+          if (answer === null) {
+            logger.print("Nothing covers that date. Run `harbor dev stories` first.");
+            return;
+          }
+
+          logger.print(describePresence(answer));
+          logger.print(`  because ${answer.interval.evidence}`);
+          return;
+        }
+
+        const timeline = presenceTimeline(db, DEFAULT_PRINCIPAL, { limit: 40 });
+
+        if (timeline.length === 0) {
+          logger.print("No timeline yet. Run `harbor dev stories` first.");
+          return;
+        }
+
+        let heading: string | null = null;
+
+        for (const interval of timeline) {
+          // A plan and a memory are different things and get different
+          // headings. The old list ran a flight in November straight on from a
+          // weekend in August under one silent heading.
+          const group =
+            interval.tense === "future"
+              ? "Coming up"
+              : interval.tense === "current"
+                ? "Right now"
+                : "Where you have been";
+
+          if (group !== heading) {
+            logger.print("");
+            logger.print(group);
+            heading = group;
+          }
+
+          const ends = interval.endsAt === null ? "onwards" : when(interval.endsAt);
+
+          logger.print(
+            `  ${interval.state.padEnd(7)} ${describePlace(interval.place).padEnd(16)} ` +
+              `${when(interval.startsAt)}  to  ${ends}`,
+          );
+          logger.print(`    ${interval.basis}: ${interval.evidence}`);
+        }
+      } finally {
+        db.close();
+      }
+    });
+
+  dev
+    .command("name-stories")
+    .description("Give stories a readable title and a sentence, using a local model")
+    .option("-n, --limit <count>", "how many to name", "20")
+    .action(async (options: { limit: string }) => {
+      const { db } = openDatabase();
+
+      try {
+        const limit = Number.parseInt(options.limit, 10);
+
+        const report = await nameStories(db, {
+          principalId: DEFAULT_PRINCIPAL,
+          timezone: timezone(),
+          limit: Number.isFinite(limit) ? limit : 20,
+          onNote: (message: string) => {
+            logger.print(`  ${message}`);
+          },
+        });
+
+        logger.print(
+          `${String(report.written)} named of ${String(report.considered)}, ` +
+            `${String(report.failed)} failed, ` +
+            `took ${String(Math.round(report.durationMs / 1000))}s`,
+        );
+      } finally {
+        db.close();
+      }
+    });
+
+  dev
+    .command("stories")
+    .description("Read anchors, find journeys and occasions, and assemble stories")
+    .option("--rebuild", "throw away every anchor and story and derive them again")
+    // Five years, because that is the span of a life a person is still
+    // answering questions about, and because a store carries stray timestamps
+    // from twenty years ago that are not events at all.
+    .option("--since <days>", "only occasions in the last N days", "1825")
+    .action((options: { since?: string; rebuild?: boolean }) => {
+      const { db } = openDatabase();
+
+      try {
+        if (options.rebuild === true) {
+          // Anchors are cleared as well as stories, because most changes worth
+          // rebuilding for are changes to what a node is understood to be
+          // about, and stories rebuilt from stale anchors look identical to
+          // stories that were never rebuilt at all.
+          const stories = clearStories(db);
+          const anchors = clearAnchors(db);
+
+          logger.print(
+            `Cleared ${String(stories)} stories and ${String(anchors)} anchors. ` +
+              `Everything will be read again.`,
+          );
+        }
+
+        const days = options.since === undefined ? null : Number.parseInt(options.since, 10);
+
+        const report = buildStories(db, {
+          principalId: DEFAULT_PRINCIPAL,
+          timezone: timezone(),
+          ...(days === null || !Number.isFinite(days)
+            ? {}
+            : { since: Date.now() - days * 86_400_000 }),
+          onNote: (message: string) => {
+            logger.print(`  ${message}`);
+          },
+        });
+
+        logger.print("");
+        logger.print(
+          `${String(report.trips)} journeys, ${String(report.occasions)} occasions, ` +
+            `${String(report.storiesWritten)} stories`,
+        );
+        logger.print(
+          `${String(report.created)} new, ${String(report.carried)} carried forward, ` +
+            `${String(report.retired)} retired, ${String(report.keptForState)} kept for your decisions`,
+        );
+        logger.print(`${String(report.crossSource)} span more than one source`);
+        logger.print(
+          `home looks like ${report.home === null ? "nowhere in particular" : describePlace(report.home)}, ` +
+            `${String(report.presence.away)} periods away`,
+        );
+        logger.print(`took ${String(Math.round(report.durationMs / 1000))}s`);
       } finally {
         db.close();
       }

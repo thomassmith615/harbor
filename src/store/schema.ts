@@ -1432,6 +1432,211 @@ export const MIGRATIONS: readonly string[] = [
   WHERE title GLOB '* (*message*)'
     AND instr(title, ' (') > 1;
   `,
+
+  // 027: anchors, stories, and presence.
+  //
+  // The relationship graph answers "are these two things connected". That is
+  // not the question the product is for. The question is "what happened", and
+  // the difference is not a matter of degree.
+  //
+  // A connected component of a similarity graph is single-linkage clustering,
+  // and single-linkage chains: A resembles B, B resembles C, and now A and C
+  // are one situation despite sharing nothing. Every guard the old design grew
+  // against that -- a forty node ceiling, a required spine kind, a two-source
+  // minimum -- fights the symptom. On sparse data those guards throw away real
+  // stories, and on dense data chaining still happens underneath them. Grabbing
+  // too much and grabbing too little are the same bug seen from two sides.
+  //
+  // So the unit changes. A story is not a component; it is a *frame* built
+  // around something that inherently defines an occasion -- a journey, a
+  // calendar entry, an order -- plus everything that points at that frame's
+  // anchors. Membership is a claim about the story, never about another member,
+  // which is what makes chaining structurally impossible rather than merely
+  // bounded.
+  //
+  //   node_anchors  What each node is about, in comparable kinds: a place, a
+  //                 span of days, an identifier, a person, a topic. Derived,
+  //                 versioned, rebuildable from stored text like everything
+  //                 else here.
+  //
+  //   stories       The frames themselves, with durable ids carried across
+  //                 rebuilds by the same membership matcher situations use.
+  //
+  //   story_nodes   Membership, with the score and the reason each member
+  //                 joined. The reason is stored rather than recomputed
+  //                 because a person reading "why is this here" a week later
+  //                 deserves the answer the pass actually used.
+  //
+  //   presence      Where the person was, over time, derived from journeys.
+  //                 The thing that makes "you are home for a week after this"
+  //                 answerable at all.
+  //
+  // Nothing is migrated in. The old threads table is untouched and keeps
+  // working; stories are a second, better answer to the same question, and
+  // they are built from items that never had to be re-fetched.
+  `
+  CREATE TABLE node_anchors (
+    node_kind   TEXT NOT NULL,
+    node_id     TEXT NOT NULL,
+    kind        TEXT NOT NULL,
+    value       TEXT NOT NULL,
+    display     TEXT NOT NULL,
+    starts_at   INTEGER,
+    ends_at     INTEGER,
+    confidence  REAL NOT NULL,
+    PRIMARY KEY (node_kind, node_id, kind, value)
+  );
+
+  -- The lookup the whole gather phase rests on: given a place, who else
+  -- mentions it. Without this it is a scan of every anchor on every frame.
+  CREATE INDEX node_anchors_lookup ON node_anchors (kind, value);
+  CREATE INDEX node_anchors_node   ON node_anchors (node_kind, node_id);
+
+  ALTER TABLE items ADD COLUMN anchors_version INTEGER;
+  ALTER TABLE episodes ADD COLUMN anchors_version INTEGER;
+
+  CREATE INDEX items_anchors_pending
+    ON items (anchors_version) WHERE deleted_at IS NULL;
+  CREATE INDEX episodes_anchors_pending ON episodes (anchors_version);
+
+  CREATE TABLE stories (
+    id                TEXT PRIMARY KEY,
+    principal_id      TEXT NOT NULL REFERENCES people (id),
+    kind              TEXT NOT NULL,
+    title             TEXT,
+    title_source      TEXT NOT NULL DEFAULT 'derived'
+                      CHECK (title_source IN ('derived', 'user')),
+    summary           TEXT,
+    -- The span of the occasion itself: wheels up to wheels down.
+    span_starts_at    INTEGER NOT NULL,
+    span_ends_at      INTEGER NOT NULL,
+    -- The span of everything gathered, which reaches back into the planning
+    -- and forward into the aftermath. Kept separately because "when was the
+    -- trip" and "when was this being talked about" are different questions and
+    -- the old schema could only answer the second.
+    starts_at         INTEGER NOT NULL,
+    ends_at           INTEGER NOT NULL,
+    place             TEXT,
+    member_count      INTEGER NOT NULL DEFAULT 0,
+    source_count      INTEGER NOT NULL DEFAULT 0,
+    salience          REAL NOT NULL DEFAULT 0,
+    state             TEXT NOT NULL DEFAULT 'open'
+                      CHECK (state IN ('open', 'resolved', 'dismissed')),
+    state_changed_at  INTEGER,
+    node_digest       TEXT,
+    first_seen_at     INTEGER,
+    last_changed_at   INTEGER,
+    created_at        INTEGER NOT NULL,
+    updated_at        INTEGER NOT NULL
+  );
+
+  CREATE INDEX stories_recent ON stories (principal_id, span_starts_at DESC);
+  CREATE INDEX stories_state  ON stories (principal_id, state, salience DESC);
+
+  CREATE TABLE story_nodes (
+    story_id   TEXT NOT NULL REFERENCES stories (id),
+    node_kind  TEXT NOT NULL,
+    node_id    TEXT NOT NULL,
+    role       TEXT NOT NULL,
+    score      REAL NOT NULL,
+    evidence   TEXT NOT NULL,
+    PRIMARY KEY (story_id, node_kind, node_id)
+  );
+
+  CREATE INDEX story_nodes_node ON story_nodes (node_kind, node_id);
+
+  CREATE TABLE presence (
+    id            TEXT PRIMARY KEY,
+    principal_id  TEXT NOT NULL REFERENCES people (id),
+    starts_at     INTEGER NOT NULL,
+    ends_at       INTEGER,
+    place         TEXT,
+    state         TEXT NOT NULL CHECK (state IN ('home', 'away', 'transit')),
+    -- observed: a journey said so. inferred: nothing said otherwise.
+    basis         TEXT NOT NULL CHECK (basis IN ('observed', 'inferred')),
+    story_id      TEXT,
+    evidence      TEXT NOT NULL,
+    created_at    INTEGER NOT NULL
+  );
+
+  CREATE INDEX presence_span ON presence (principal_id, starts_at);
+  `,
+
+  // 028: a story may be named by a model.
+  //
+  // SQLite cannot alter a CHECK constraint, so `stories` is rebuilt. The
+  // constraint is the point rather than an obstacle: `title_source` is what
+  // keeps a generated label out of everything that reasons, and dropping the
+  // check to widen it would remove the only thing enforcing that.
+  //
+  // The hard part is `story_nodes`, which holds a foreign key to `stories`.
+  // Dropping a parent table while a child still has rows pointing at it is a
+  // violation, and on a database with no stories in it there is nothing to
+  // violate -- which is exactly why every test passed and every real store
+  // failed with `FOREIGN KEY constraint failed` on the next command it ran.
+  //
+  // `PRAGMA defer_foreign_keys` does not rescue it either, and it is worth
+  // saying why, because it looks like it should. Deferring moves the check to
+  // COMMIT, but SQLite counts the violation when the parent rows are deleted
+  // and only decrements it on a later change to the *rows*. Renaming a table
+  // into place afterwards resolves the reference and does not touch the
+  // counter, so the transaction still fails at COMMIT having done everything
+  // correctly.
+  //
+  // So the children are moved out of the way instead: parked in a plain table
+  // with no constraints, deleted, and put back once the new parent exists.
+  // `story_nodes` itself never changes shape, so it is never dropped and its
+  // index survives.
+  `
+  CREATE TABLE story_nodes_parked (
+    story_id   TEXT NOT NULL,
+    node_kind  TEXT NOT NULL,
+    node_id    TEXT NOT NULL,
+    role       TEXT NOT NULL,
+    score      REAL NOT NULL,
+    evidence   TEXT NOT NULL
+  );
+
+  INSERT INTO story_nodes_parked SELECT * FROM story_nodes;
+  DELETE FROM story_nodes;
+
+  CREATE TABLE stories_new (
+    id                TEXT PRIMARY KEY,
+    principal_id      TEXT NOT NULL REFERENCES people (id),
+    kind              TEXT NOT NULL,
+    title             TEXT,
+    title_source      TEXT NOT NULL DEFAULT 'derived'
+                      CHECK (title_source IN ('derived', 'user', 'model')),
+    summary           TEXT,
+    span_starts_at    INTEGER NOT NULL,
+    span_ends_at      INTEGER NOT NULL,
+    starts_at         INTEGER NOT NULL,
+    ends_at           INTEGER NOT NULL,
+    place             TEXT,
+    member_count      INTEGER NOT NULL DEFAULT 0,
+    source_count      INTEGER NOT NULL DEFAULT 0,
+    salience          REAL NOT NULL DEFAULT 0,
+    state             TEXT NOT NULL DEFAULT 'open'
+                      CHECK (state IN ('open', 'resolved', 'dismissed')),
+    state_changed_at  INTEGER,
+    node_digest       TEXT,
+    first_seen_at     INTEGER,
+    last_changed_at   INTEGER,
+    created_at        INTEGER NOT NULL,
+    updated_at        INTEGER NOT NULL
+  );
+
+  INSERT INTO stories_new SELECT * FROM stories;
+
+  DROP TABLE stories;
+  ALTER TABLE stories_new RENAME TO stories;
+
+  INSERT INTO story_nodes SELECT * FROM story_nodes_parked;
+  DROP TABLE story_nodes_parked;
+
+  CREATE INDEX stories_recent ON stories (principal_id, span_starts_at DESC);
+  CREATE INDEX stories_state  ON stories (principal_id, state, salience DESC);
+  `,
 ];
 
 /** The only principal that exists until household support lands. */

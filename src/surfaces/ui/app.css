@@ -508,3 +508,224 @@ code {
 .message-from { font-size: 12.5px; font-weight: 620; color: var(--accent); }
 .message-when { font: 10.5px/1 var(--mono); color: var(--faint); margin-left: auto; }
 .message-text { font-size: 13.5px; margin-top: 3px; white-space: pre-wrap; word-break: break-word; }
+
+/* ---- stories and presence ---- */
+
+/* Where you have been, as a strip above what happened. Bands rather than a
+   chart: the useful fact is "away, Boston, those four days", and a chart makes
+   somebody read an axis to recover it. */
+.presence-strip {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0 0 18px;
+}
+
+.presence-band {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 7px 11px;
+  border-radius: 7px;
+  border-left: 3px solid transparent;
+  font-size: 13px;
+}
+
+.presence-band.home {
+  background: rgba(127, 127, 127, 0.07);
+  border-left-color: rgba(127, 127, 127, 0.35);
+}
+
+.presence-band.away {
+  background: rgba(90, 140, 255, 0.1);
+  border-left-color: rgba(90, 140, 255, 0.6);
+}
+
+.presence-place {
+  font-weight: 600;
+}
+
+.presence-when {
+  opacity: 0.65;
+  font-variant-numeric: tabular-nums;
+}
+
+/* An assumption, marked as one. Observed and inferred are different claims and
+   the surface must not render them identically. */
+.presence-basis {
+  margin-left: auto;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  opacity: 0.5;
+}
+
+.card.story .card-sub {
+  font-variant-numeric: tabular-nums;
+  opacity: 0.7;
+}
+
+/* Roles other than plain evidence. "Preparation" is what makes a reminder to
+   pack a laptop legible as part of a trip rather than a stray task nearby. */
+.node-role {
+  display: inline-block;
+  margin: 2px 0 4px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  opacity: 0.55;
+}
+
+.node.role-spine {
+  border-left: 2px solid rgba(90, 140, 255, 0.55);
+  padding-left: 10px;
+}
+
+.why-line {
+  font-size: 12.5px;
+  opacity: 0.72;
+  padding: 1px 0 1px 12px;
+  position: relative;
+}
+
+.why-line::before {
+  content: "";
+  position: absolute;
+  left: 2px;
+  top: 9px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.4;
+}
+
+/* A band that is also a story. The timeline and the stories are one surface,
+   not two lists to join up by eye. */
+.presence-band.linked {
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  border-top: 0;
+  border-right: 0;
+  border-bottom: 0;
+}
+
+.presence-band.linked:hover {
+  filter: brightness(1.08);
+}
+
+/* ---- one card, one size ---- */
+
+/* Story cards were sized by their content, so a trip with a long title and four
+   badges towered over a haircut with two. On a list you are scanning for things
+   you have forgotten, varying size reads as varying importance, and the sizing
+   was tracking nothing but string length. */
+.card.story {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+  min-height: 0;
+}
+
+.card.story .card-title {
+  font-size: 15px;
+  line-height: 1.3;
+  margin: 0;
+  /* One line, always. A two-line title is what made the cards ragged. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.card.story .card-sub,
+.card.story .badge {
+  font-size: 12px;
+}
+
+.card-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+/* How long you have, which is the point of the section. */
+.card-until {
+  margin-left: auto;
+  flex: none;
+  font-size: 12px;
+  font-weight: 600;
+  opacity: 0.75;
+  white-space: nowrap;
+}
+
+/* ---- the past, folded ---- */
+
+.past-fold {
+  margin: 18px 0 8px;
+}
+
+.past-fold > summary {
+  cursor: pointer;
+  padding: 9px 2px;
+  font-size: 13px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  opacity: 0.6;
+  user-select: none;
+}
+
+.past-fold > summary:hover {
+  opacity: 0.9;
+}
+
+.past-fold[open] > summary {
+  margin-bottom: 8px;
+}
+
+.empty {
+  opacity: 0.55;
+  font-size: 13px;
+  margin: 2px 0 14px;
+}
+
+/* An upcoming entry that Harbor has not assembled a story for is still an
+   entry. It just is not clickable. */
+.card.story:not(button) {
+  cursor: default;
+}
+
+/* What kind of thing this is, at a glance. Travel is the one worth spotting
+   from across the list, because it reorganises a week. */
+.badge-kind {
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-size: 10.5px;
+  opacity: 0.7;
+}
+
+.card.kind-travel {
+  border-left: 3px solid rgba(90, 140, 255, 0.6);
+}
+
+.card.kind-task {
+  border-left: 3px solid rgba(127, 127, 127, 0.35);
+}
+
+/* The sentence a model wrote. It says what the thing is far better than a
+   calendar title does, so it gets room. */
+.card-summary {
+  font-size: 13px;
+  line-height: 1.45;
+  opacity: 0.8;
+  margin: 5px 0 7px;
+}
+
+/* The travel strip is a run to be read top to bottom, so the band you are in
+   right now has to be findable without reading dates. */
+.presence-band.away {
+  font-weight: 500;
+}
