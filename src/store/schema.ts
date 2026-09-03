@@ -1692,17 +1692,39 @@ export const MIGRATIONS: readonly string[] = [
   // Both CHECK constraints require a rebuild; SQLite cannot alter one in place.
   // Children are parked and restored the way the stories rebuild does it.
   `
-  PRAGMA foreign_keys = OFF;
+  -- Children first.
+  --
+  -- The trap is documented on the stories rebuild above and I walked straight
+  -- into it anyway, so it is worth restating where somebody will hit it next.
+  -- PRAGMA foreign_keys is a no-op inside a transaction and every migration
+  -- here runs in one, so turning it off achieves nothing. defer_foreign_keys
+  -- does not rescue it either: SQLite counts a violation when the parent rows
+  -- are deleted and only decrements it on a later change to the *rows*, so
+  -- renaming a table into place resolves the reference without touching the
+  -- counter and COMMIT still fails having done everything correctly.
+  --
+  -- So every child of entities is parked in a constraint-free table, emptied,
+  -- and put back once the new parent exists. item_entities and entity_aliases
+  -- do not change shape and are restored verbatim; identifiers is rebuilt
+  -- because its CHECK constraint is one of the things being changed.
+  CREATE TABLE item_entities_parked AS SELECT * FROM item_entities;
+  DELETE FROM item_entities;
+
+  CREATE TABLE entity_aliases_parked AS SELECT * FROM entity_aliases;
+  DELETE FROM entity_aliases;
 
   CREATE TABLE identifiers_parked AS SELECT * FROM identifiers;
   DROP TABLE identifiers;
 
+  -- The self-reference points at entities_new and is rewritten to entities by
+  -- the rename below. Pointing it at entities instead would leave it dangling
+  -- for the moment between the DROP and the RENAME.
   CREATE TABLE entities_new (
     id            TEXT PRIMARY KEY,
     kind          TEXT NOT NULL CHECK (kind IN ('person', 'org', 'self', 'place')),
     display_name  TEXT NOT NULL,
     pinned        INTEGER NOT NULL DEFAULT 0,
-    merged_into   TEXT REFERENCES entities (id),
+    merged_into   TEXT REFERENCES entities_new (id),
     created_at    INTEGER NOT NULL,
     updated_at    INTEGER NOT NULL
   );
@@ -1733,7 +1755,11 @@ export const MIGRATIONS: readonly string[] = [
 
   CREATE INDEX identifiers_entity ON identifiers (entity_id);
 
-  PRAGMA foreign_keys = ON;
+  INSERT INTO item_entities SELECT * FROM item_entities_parked;
+  DROP TABLE item_entities_parked;
+
+  INSERT INTO entity_aliases SELECT * FROM entity_aliases_parked;
+  DROP TABLE entity_aliases_parked;
 
   -- What is known about an entity, and where it was read.
   --
@@ -1743,7 +1769,7 @@ export const MIGRATIONS: readonly string[] = [
   -- text from somebody else in 2019 and has not seen it since. Every other
   -- derived claim in the store carries its provenance and these must too: a
   -- standing fact about a person colours every sentence written about them
-  -- afterwards and a wrong one does damage for months before anybody notices.
+  -- afterwards, and a wrong one does damage for months before anybody notices.
   --
   -- UNIQUE is on (entity, kind, normalized) rather than (entity, kind): people
   -- have two numbers, three addresses and more than one employer over time.

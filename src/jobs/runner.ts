@@ -678,11 +678,13 @@ async function run(db: DB, jobId: string, task: JobTask, context: JobContext): P
   }
 
   if (task === "attributes") {
-    // Places, name keys, and what is known about people.
+    // Name keys and what people have stated about themselves.
     //
-    // Before stories rather than after, because a venue anchor that resolves to
-    // a place entity is a key two nodes can share, and the frame layer is one
-    // of the things that wants to share it.
+    // Venue resolution also runs here, and again inside `buildStories`. That is
+    // not redundancy to tidy away: a resolved venue lives in an anchor, and
+    // anything that rebuilds anchors would otherwise undo it. Running it in
+    // both places means no order of operations leaves the store half-resolved,
+    // and the second call is a no-op when the first has already done the work.
     const places = resolvePlaces(db, {});
     const stated = extractAttributes(db, {});
     const promoted = promoteIdentifiers(db);

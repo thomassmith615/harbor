@@ -24,7 +24,6 @@ import { after, before, describe, test } from "node:test";
 import { derive } from "./pipeline.js";
 import { resolveEntities } from "./entities.js";
 import { anchorNodes, buildStories } from "./stories.js";
-import { resolvePlaces } from "./venues.js";
 import { relate } from "./relate.js";
 import { seedBarFixture, seedBarReactions } from "../fixtures/bar-night.js";
 import { fixtureEmbedder, openTestStore, type TestStore } from "../fixtures/harness.js";
@@ -70,7 +69,11 @@ before(async () => {
   await derive(store.db, fixtureEmbedder(), { timezone: TZ });
   resolveEntities(store.db, {});
   anchorNodes(store.db, { timezone: TZ });
-  resolvePlaces(store.db, {});
+
+  // No explicit resolvePlaces call. `buildStories` does it, because a venue
+  // resolved to a place lives in an anchor and `--rebuild` clears anchors: a
+  // sequence that resolved separately would be undone by any later rebuild,
+  // and the only symptom would be fewer edges.
 
   // Stories before relate, deliberately. The plan layer resolves "the bar" to a
   // venue by matching a time, and writes that conclusion back as an anchor; the

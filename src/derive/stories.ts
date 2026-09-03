@@ -30,6 +30,7 @@ import { pairProposals } from "./situations.js";
 import { NoiseIndex } from "./noise.js";
 import { addAnchors, anchorsFor } from "../store/anchors.js";
 import { findPlace } from "../store/places.js";
+import { resolvePlaces } from "./venues.js";
 import { clockOf } from "./timing.js";
 import { TermIndex } from "./terms.js";
 import { NameIndex } from "./mentions.js";
@@ -392,6 +393,28 @@ export function buildStories(db: DB, options: StoryOptions): StoryReport {
   const terms = new TermIndex(db);
   const self = selfEntity(db);
 
+  // Venues become places before frames are detected, and this call is here
+  // rather than left to the `attributes` job for a reason worth writing down.
+  //
+  // Resolution rewrites a venue anchor to hold a place id instead of a phrase.
+  // That is a *derived value living in an anchor*, and `dev stories --rebuild`
+  // clears every anchor before recomputing them from text, which recreates the
+  // phrase and silently destroys the resolution. The graph then loses every
+  // edge that joined on a shared place, and the only symptom is fewer edges,
+  // which is exactly the symptom this whole layer exists to fix.
+  //
+  // Ordering enforced in code beats ordering enforced in a runbook: anything
+  // that rebuilds anchors now re-resolves them in the same pass, so there is no
+  // sequence of commands that leaves the store half-resolved.
+  const placed = resolvePlaces(db, {});
+
+  if (placed.resolved > 0) {
+    options.onNote?.(
+      `${String(placed.resolved)} venue mentions resolved to ` +
+        `${String(placed.created)} new places`,
+    );
+  }
+
   const detected = detectFrames(db, noise, {
     since: options.since,
     timezone: options.timezone,
@@ -657,6 +680,28 @@ export function explainStory(
   const resolver = new NodeResolver(db);
   const terms = new TermIndex(db);
   const self = selfEntity(db);
+
+  // Venues become places before frames are detected, and this call is here
+  // rather than left to the `attributes` job for a reason worth writing down.
+  //
+  // Resolution rewrites a venue anchor to hold a place id instead of a phrase.
+  // That is a *derived value living in an anchor*, and `dev stories --rebuild`
+  // clears every anchor before recomputing them from text, which recreates the
+  // phrase and silently destroys the resolution. The graph then loses every
+  // edge that joined on a shared place, and the only symptom is fewer edges,
+  // which is exactly the symptom this whole layer exists to fix.
+  //
+  // Ordering enforced in code beats ordering enforced in a runbook: anything
+  // that rebuilds anchors now re-resolves them in the same pass, so there is no
+  // sequence of commands that leaves the store half-resolved.
+  const placed = resolvePlaces(db, {});
+
+  if (placed.resolved > 0) {
+    options.onNote?.(
+      `${String(placed.resolved)} venue mentions resolved to ` +
+        `${String(placed.created)} new places`,
+    );
+  }
 
   const detected = detectFrames(db, noise, {
     since: options.since,
