@@ -88,6 +88,32 @@ const MAX_PER_TERM = 12;
 /** Hard ceiling on how much work one node may generate, whatever the generators say. */
 const MAX_CANDIDATES = 200;
 
+/**
+ * How far apart two nodes stating the same hour may sit and still be one
+ * evening.
+ *
+ * Narrow, and it has to be. A time of day is a strong signal precisely because
+ * it is specific, and widening this to a day would make it a weak signal about
+ * everything that happened that day.
+ */
+const CLOCK_WINDOW_MS = 12 * 3_600_000;
+
+/** How far a shared place reaches. Wider than time; a venue is a venue. */
+const PLACE_WINDOW_MS = 30 * 86_400_000;
+
+/** How many neighbours the vector index contributes per node. */
+const VECTOR_DEPTH = 20;
+
+/**
+ * Below this a neighbour is not a neighbour.
+ *
+ * Deliberately high. This generator produces candidates, not edges, so a
+ * permissive threshold costs work rather than correctness -- but it costs work
+ * on every node in the store, and a cosine of 0.6 between two short messages is
+ * a statement about English rather than about them.
+ */
+const VECTOR_FLOOR = 0.78;
+
 interface Collector {
   readonly found: Map<string, { node: GraphNode; via: string[] }>;
   readonly notes: string[];
@@ -118,6 +144,21 @@ export interface CandidateContext {
   readonly noise: NoiseIndex;
   /** The entity that is the user. Sharing only this one means nothing. */
   readonly selfEntityId: string | null;
+  /**
+   * Nearest neighbours by embedding, if an index is open.
+   *
+   * Optional, and the whole design turns on what it is allowed to do. The
+   * README argues content generation is deliberately not embeddings because a
+   * cosine score cannot be checked by the person it is wrong about. That
+   * argument is right about *evidence* and wrong about *candidates*: a
+   * generator produces no output, and a linker still has to justify every edge
+   * in a sentence. Splitting proposal from judgment lets similarity widen the
+   * net at no cost to explainability, which is the one thing that reaches two
+   * nodes sharing no word, no person and no identifier.
+   */
+  readonly neighbours?:
+    | ((node: GraphNode, limit: number) => readonly { readonly ref: NodeRef; readonly score: number }[])
+    | undefined;
 }
 
 /**
@@ -458,6 +499,149 @@ function contentCandidates(
   }
 }
 
+/**
+ * Nodes about the same place.
+ *
+ * The generator that could not exist before places were entities. A venue used
+ * to be a phrase on an anchor, so two nodes about one bar under two names held
+ * two unrelated strings; now they hold the same id and this is an index lookup.
+ *
+ * Skips anchors still holding a phrase rather than an id. An unresolved venue
+ * is a reference like "the bar", which every conversation in the store contains
+ * and which identifies nothing.
+ */
+function placeCandidates(
+  db: DB,
+  subject: GraphNode,
+  context: CandidateContext,
+  collector: Collector,
+): void {
+  const places = db
+    .prepare(
+      `SELECT value FROM node_anchors
+       WHERE node_kind = @kind AND node_id = @id AND kind = 'venue'
+         AND SUBSTR(value, 1, 2) = 'e_'`,
+    )
+    .all({ kind: subject.ref.kind, id: subject.ref.id }) as { value: string }[];
+
+  for (const place of places) {
+    const rows = db
+      .prepare(
+        `SELECT a.node_kind AS kind, a.node_id AS id
+         FROM node_anchors a
+         WHERE a.kind = 'venue' AND a.value = @place
+         LIMIT @cap`,
+      )
+      .all({ place: place.value, cap: MAX_PER_TERM * 2 }) as { kind: string; id: string }[];
+
+    for (const row of rows) {
+      const ref: NodeRef = { kind: row.kind as NodeRef["kind"], id: row.id };
+
+      if (nodeKey(ref) === nodeKey(subject.ref)) {
+        continue;
+      }
+
+      const node = context.resolver.node(ref);
+
+      if (node === null || Math.abs(node.occurredAt - subject.occurredAt) > PLACE_WINDOW_MS) {
+        continue;
+      }
+
+      add(collector, node, "same_place");
+    }
+  }
+}
+
+/**
+ * Nodes stating a time of day that overlaps this one's.
+ *
+ * The other key that did not exist. `dates.ts` reads days and returns midnight
+ * to midnight, so until `time_hint` anchors there was nothing in the store
+ * capable of saying two things happen at the same hour -- which is the only
+ * thing a conversation saying "later" and a confirmation saying 8:00 PM have in
+ * common.
+ *
+ * Overlap of the stated intervals, not proximity of the nodes. A reservation
+ * mailed at six for a table at eight overlaps a plan made at quarter to six
+ * for "later"; the nodes are an hour apart and the times they describe are the
+ * same time, and it is the second fact that matters.
+ */
+function clockCandidates(
+  db: DB,
+  subject: GraphNode,
+  context: CandidateContext,
+  collector: Collector,
+): void {
+  const hints = db
+    .prepare(
+      `SELECT starts_at, ends_at FROM node_anchors
+       WHERE node_kind = @kind AND node_id = @id AND kind = 'time_hint'
+         AND starts_at IS NOT NULL AND ends_at IS NOT NULL`,
+    )
+    .all({ kind: subject.ref.kind, id: subject.ref.id }) as {
+    starts_at: number;
+    ends_at: number;
+  }[];
+
+  for (const hint of hints) {
+    const rows = db
+      .prepare(
+        `SELECT DISTINCT a.node_kind AS kind, a.node_id AS id
+         FROM node_anchors a
+         WHERE a.kind = 'time_hint'
+           AND a.starts_at IS NOT NULL AND a.ends_at IS NOT NULL
+           AND a.starts_at <= @endsAt AND a.ends_at >= @startsAt
+           AND a.starts_at BETWEEN @floor AND @ceiling
+         LIMIT @cap`,
+      )
+      .all({
+        startsAt: hint.starts_at,
+        endsAt: hint.ends_at,
+        floor: hint.starts_at - CLOCK_WINDOW_MS,
+        ceiling: hint.ends_at + CLOCK_WINDOW_MS,
+        cap: MAX_PER_TERM * 2,
+      }) as { kind: string; id: string }[];
+
+    for (const row of rows) {
+      const ref: NodeRef = { kind: row.kind as NodeRef["kind"], id: row.id };
+
+      if (nodeKey(ref) === nodeKey(subject.ref)) {
+        continue;
+      }
+
+      add(collector, context.resolver.node(ref), "same_clock");
+    }
+  }
+}
+
+/**
+ * Nodes the embedding index puts nearby.
+ *
+ * The widest net and the least trustworthy, which is why it is last and why
+ * nothing downstream may treat "the vectors agree" as a reason. It exists to
+ * reach the pair no other generator can see, so that a linker gets the chance
+ * to find a checkable reason -- or to reject it, which is the common outcome
+ * and is fine, because rejecting a pair is cheap and never seeing it is
+ * permanent.
+ */
+function neighbourCandidates(
+  subject: GraphNode,
+  context: CandidateContext,
+  collector: Collector,
+): void {
+  if (context.neighbours === undefined) {
+    return;
+  }
+
+  for (const hit of context.neighbours(subject, VECTOR_DEPTH)) {
+    if (hit.score < VECTOR_FLOOR || nodeKey(hit.ref) === nodeKey(subject.ref)) {
+      continue;
+    }
+
+    add(collector, context.resolver.node(hit.ref), "similar");
+  }
+}
+
 export function candidatesFor(
   db: DB,
   subject: GraphNode,
@@ -470,6 +654,9 @@ export function candidatesFor(
   entityCandidates(db, subject, context, collector);
   taskCandidates(db, subject, context, collector);
   contentCandidates(db, subject, context, collector);
+  placeCandidates(db, subject, context, collector);
+  clockCandidates(db, subject, context, collector);
+  neighbourCandidates(subject, context, collector);
 
   const ordered = [...collector.found.values()]
     .sort(

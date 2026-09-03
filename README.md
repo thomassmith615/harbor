@@ -541,6 +541,75 @@ else; `source_line` sits beside it so every surface displays the original. The
 failure it leaves is a bad search result, which is visible and recoverable, not
 a false claim in an answer, which is neither.
 
+## Why the graph was empty
+
+Not a threshold problem, and worth stating precisely because the obvious fix is
+the wrong one.
+
+Every linker judged on one of three things: a shared distinctive word, a shared
+person, or a shared arbitrary identifier. Candidate generation used the same
+three plus thread adjacency and a time window. So the whole apparatus was a
+string matcher with a date filter, and it rejected the flagship case correctly.
+A group chat saying "the bar" and a confirmation saying "Great American Pub"
+share no token. Both `bar` and `pub` are three letters, below the term index
+floor, so neither could be a token even if they had matched. `arranges` received
+the pair and turned it down with "nothing in common: no shared person, no shared
+distinctive word", which was true.
+
+Loosening thresholds would have produced garbage. The fix is to give the store
+more kinds of thing that can be *identical*, by normalising data into shared
+keys before matching rather than by matching raw text harder. Three keys, none
+of which existed:
+
+**A place id.** Once a venue is an entity, two nodes about one bar under two
+names hold the same value and the match is a join rather than a guess.
+
+**A stated hour.** `dates.ts` reads days and returns midnight to midnight, so
+nothing in the store could say two things happen at the same time of day, which
+is the only thing "later" and "8:00 PM" have in common. The `same_occasion`
+linker uses the asymmetry the plan layer already relies on: a narrow interval
+inside a wide one is an answer, two wide intervals overlapping is a coincidence.
+It also requires a second, non-temporal reason, because a dozen nodes state an
+hour on any given evening and most of them are newsletters.
+
+**A standalone rewrite.** See Propositions above.
+
+And one change of principle: **similarity may propose, and may never justify.**
+Content evidence is still not embeddings, because "the vectors agree" cannot be
+checked by the person it is wrong about. But a *candidate* generator produces no
+output and every linker still has to write a sentence, so the cost of a loose
+generator is wasted comparisons while the cost of a tight one is permanent: a
+pair no generator produces is a pair no linker can ever judge. Nearest
+neighbours now widen the net; nothing downstream may treat proximity as a
+reason.
+
+**The story layer teaches the graph.** A plan resolves "the bar" to a venue by
+matching a time, and that conclusion used to be thrown away. It is now written
+back to the conversation as a second venue anchor beside the phrase somebody
+wrote, so a thing worked out once is available to every pass afterwards. "the
+bar" is still never a place; what is recorded is narrower and true, that this
+conversation was about this venue. `stories` therefore runs before `relate`.
+
+## Measurement
+
+Every threshold in this store was an argument. The rarity ceiling, the fourteen
+hour window, the 0.6 admission bar, whether a reminder ninety minutes before
+something is about it: all reasoned about carefully, none ever measured, because
+there was nothing to measure against.
+
+`harbor dev feedback up|down` records a verdict and a trace. The trace is the
+point: a thumbs-down usually means the sentence was bad rather than that
+retrieval was wrong, and without the candidate set a negative verdict is
+unattributable. `harbor dev eval` replays recorded cases against the current
+build and reports what moved.
+
+Three constraints hold it honest. Nothing reads the verdicts at query time, ever:
+a system that reweights on its own past outputs learns its own habits, and at
+this volume there is nothing to fit. Answers are never compared, only retrieval,
+because two runs produce two different sentences and comparing them would measure
+a model's phrasing. And a thumbs-down case is never reported as fixed, only as
+changed, because nothing available here would justify the stronger claim.
+
 ## The graph
 
 An edge joins two **nodes**, and a node is an item or an episode. That

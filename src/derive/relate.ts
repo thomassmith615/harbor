@@ -25,6 +25,7 @@
  * candidates.ts, which are deliberately set far above where real data sits.
  */
 import { LINKERS, RELATIONSHIP_VERSION } from "./linkers.js";
+import { neighbourLookup } from "./neighbours.js";
 import { candidatesFor } from "./candidates.js";
 import { indexReferences, REFERENCE_VERSION } from "./references.js";
 import { TermIndex } from "./terms.js";
@@ -48,7 +49,7 @@ import { selfEntity } from "../store/entities.js";
 import { buildThreads } from "./threads.js";
 import type { DB } from "../kernel/db.js";
 import type { GraphNode, NodeRef } from "../store/nodes.js";
-import type { LinkerContext } from "./linkers.js";
+import type { LinkerContext, StoredAnchor } from "./linkers.js";
 import type { ThreadReport } from "./threads.js";
 
 export interface RelateOptions {
@@ -89,6 +90,51 @@ const BATCH = 200;
  * and the same neighbouring nodes recur across subjects. Without the cache this
  * is the hot query in the pass.
  */
+/**
+ * Anchors by node and kind, read once per node.
+ *
+ * The linkers that judge on a place id or a time interval would otherwise hit
+ * `node_anchors` twice per pair, and a node is compared against up to two
+ * hundred candidates.
+ */
+function anchorCache(
+  db: DB,
+): (node: GraphNode, kind: string) => readonly StoredAnchor[] {
+  const held = new Map<string, readonly StoredAnchor[]>();
+
+  const statement = db.prepare(
+    `SELECT value, display, starts_at, ends_at FROM node_anchors
+     WHERE node_kind = ? AND node_id = ? AND kind = ?`,
+  );
+
+  return (node, kind) => {
+    const key = `${nodeKey(node.ref)}:${kind}`;
+    const cached = held.get(key);
+
+    if (cached !== undefined) {
+      return cached;
+    }
+
+    const rows = statement.all(node.ref.kind, node.ref.id, kind) as {
+      value: string;
+      display: string;
+      starts_at: number | null;
+      ends_at: number | null;
+    }[];
+
+    const anchors = rows.map((row) => ({
+      value: row.value,
+      display: row.display,
+      startsAt: row.starts_at,
+      endsAt: row.ends_at,
+    }));
+
+    held.set(key, anchors);
+
+    return anchors;
+  };
+}
+
 function entityCache(
   db: DB,
   selfEntityId: string | null,
@@ -242,6 +288,17 @@ export function relate(db: DB, options: RelateOptions): RelateReport {
   const resolver = new NodeResolver(db);
   const terms = new TermIndex(db);
 
+  // Whichever model wrote the vectors, if any did. Read from the store rather
+  // than from configuration: an index built under a previous model is not one
+  // this pass may compare against, and asking the store which model is present
+  // is the only way to know.
+  const embeddingModel = (
+    db.prepare(`SELECT model FROM embeddings LIMIT 1`).get() as { model: string } | undefined
+  )?.model;
+
+  const neighbours =
+    embeddingModel === undefined ? undefined : neighbourLookup(db, embeddingModel);
+
   options.onNote?.(
     `a word counts as distinctive below ${String(terms.rarityCeiling)} appearances ` +
       `in ${String(terms.corpusSize)} things`,
@@ -253,6 +310,7 @@ export function relate(db: DB, options: RelateOptions): RelateReport {
     selfEntityId,
     terms,
     entitiesOf: entityCache(db, selfEntityId),
+    anchorsOf: anchorCache(db),
   };
 
   const total = Math.min(
@@ -292,7 +350,7 @@ export function relate(db: DB, options: RelateOptions): RelateReport {
           continue;
         }
 
-        const set = candidatesFor(db, subject, { resolver, terms, noise, selfEntityId });
+        const set = candidatesFor(db, subject, { resolver, terms, noise, selfEntityId, neighbours });
         considered += set.candidates.length;
 
         for (const candidate of set.candidates) {
@@ -401,9 +459,22 @@ export function explain(
     selfEntityId,
     terms,
     entitiesOf: entityCache(db, selfEntityId),
+    anchorsOf: anchorCache(db),
   };
 
-  const set = candidatesFor(db, subject, { resolver, terms, noise, selfEntityId });
+  // `harbor why` has to generate the same candidate set the pass did, or it
+  // explains a decision that was never made.
+  const model = (
+    db.prepare(`SELECT model FROM embeddings LIMIT 1`).get() as { model: string } | undefined
+  )?.model;
+
+  const set = candidatesFor(db, subject, {
+    resolver,
+    terms,
+    noise,
+    selfEntityId,
+    neighbours: model === undefined ? undefined : neighbourLookup(db, model),
+  });
 
   const people = [...entitiesOfNode(db, ref)].map((entityId) => {
     const row = db.prepare(`SELECT display_name AS name FROM entities WHERE id = ?`).get(entityId) as

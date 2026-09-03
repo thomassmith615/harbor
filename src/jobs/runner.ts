@@ -60,8 +60,12 @@ export const JOB_TASKS = [
   // Rewriting short messages so they stand alone. Costs a model call per
   // conversation, so it is its own task rather than part of derive.
   "propositions",
-  "relate",
+  // Stories before relate. The plan layer resolves "the bar" to a venue by
+  // matching a time and writes that conclusion back as an anchor; the graph is
+  // what consumes it. The other order means relate reads a store that has not
+  // yet been taught what the story layer worked out.
   "stories",
+  "relate",
   "name-stories",
   "commit",
   "extract",
@@ -122,14 +126,38 @@ const DECLARED: Readonly<Record<JobTask, readonly JobTask[]>> = {
   resolve: ["onboard", "pulse", "sync", "recent", "backfill", "resolve", "relate", "signals"],
   // Relating asks "are these the same person" of the entity layer, so it must
   // not run while that layer is being rewritten.
-  relate: ["onboard", "pulse", "sync", "recent", "backfill", "resolve", "relate", "signals"],
+  relate: [
+    "onboard",
+    "pulse",
+    "sync",
+    "recent",
+    "backfill",
+    "resolve",
+    // Stories teach the graph. The plan layer resolves "the bar" to a venue by
+    // matching a time and writes that back as an anchor, and `relate` is what
+    // consumes it: running them concurrently means the graph reads a store
+    // half-taught, and which half depends on scheduling.
+    "stories",
+    "relate",
+    "signals",
+  ],
   // Reads anchors, the calendar, and the entity layer, and writes its own
   // tables. Blocked by ingest and by resolution for the same reason relate is:
   // it asks who is on a conversation, and that answer must not be changing
   // underneath it.
   attributes: ["onboard", "pulse", "sync", "recent", "backfill", "resolve", "attributes"],
   propositions: ["onboard", "pulse", "derive", "propositions"],
-  stories: ["onboard", "pulse", "sync", "recent", "backfill", "resolve", "attributes", "stories"],
+  stories: [
+    "onboard",
+    "pulse",
+    "sync",
+    "recent",
+    "backfill",
+    "resolve",
+    "attributes",
+    "stories",
+    "relate",
+  ],
   // Reads stories and writes only their title and summary. Blocked by the pass
   // that builds them, and by itself.
   "name-stories": ["onboard", "pulse", "sync", "stories", "name-stories"],

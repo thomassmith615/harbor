@@ -195,6 +195,8 @@ import {
   unlinkIdentifier,
 } from "../store/entities.js";
 import { search } from "../retrieval/search.js";
+import { feedbackSummary, recordFeedback, type Trace } from "../surfaces/feedback.js";
+import { runEval } from "../surfaces/evaluate.js";
 import type { Embedder } from "../derive/embed/index.js";
 import { DEFAULT_PRINCIPAL } from "../store/schema.js";
 import { nodeKey, parseNodeRef, summarize } from "../store/nodes.js";
@@ -283,6 +285,81 @@ function plural(count: number, one: string, many: string): string {
  * reachable, say so once and carry on with keyword search rather than failing a
  * question the store can still mostly answer.
  */
+/**
+ * The last thing asked, so `dev feedback up` needs no arguments.
+ *
+ * Read from the conversation store rather than kept in a variable, because the
+ * feedback is given in a separate invocation of the binary from the answer it
+ * is about.
+ */
+function lastQuestion(db: ReturnType<typeof openDatabase>["db"]): string | null {
+  const row = db
+    .prepare(`SELECT content FROM turns WHERE role = 'user' ORDER BY created_at DESC LIMIT 1`)
+    .get() as { content: string } | undefined;
+
+  return row?.content ?? null;
+}
+
+/**
+ * The trace for a question, if the answer recorded one.
+ *
+ * Returns null rather than throwing when tracing was off. A verdict without a
+ * trace is worth less and is still worth having: it says what somebody thought,
+ * and `dev eval` reports it as untestable rather than counting it as a pass.
+ */
+function lastTrace(
+  db: ReturnType<typeof openDatabase>["db"],
+  question: string,
+): Trace | null {
+  // Reconstructed from the turn rather than emitted by the answer path.
+  //
+  // `turns` already records the evidence, the tools called and the model, which
+  // is most of a trace, and reading it back means `ask` needs no knowledge that
+  // feedback exists. What is missing is the rejections: a turn stores what was
+  // shown and not what was considered and dropped, so a case replayed from here
+  // can show what was lost and cannot explain why something was excluded in the
+  // first place. That is the seam to close when `gather` learns to persist its
+  // explanation, and it is a real limit rather than a detail.
+  const row = db
+    .prepare(
+      `SELECT content, evidence, tools_used, model, created_at
+       FROM turns WHERE role = 'assistant' ORDER BY created_at DESC LIMIT 1`,
+    )
+    .get() as
+    | {
+        content: string;
+        evidence: string | null;
+        tools_used: string | null;
+        model: string | null;
+        created_at: number;
+      }
+    | undefined;
+
+  if (row === undefined) {
+    return null;
+  }
+
+  const evidence = row.evidence === null ? [] : (JSON.parse(row.evidence) as string[]);
+  const tools = row.tools_used === null ? [] : (JSON.parse(row.tools_used) as string[]);
+
+  return {
+    at: row.created_at,
+    question,
+    surface: "cli",
+    tier: null,
+    model: row.model,
+    tools,
+    candidates: evidence.map((ref) => ({
+      ref: ref.includes(":") ? ref : `item:${ref}`,
+      title: null,
+      score: 1,
+      admitted: true,
+      because: ["shown to the model"],
+    })),
+    answer: row.content.slice(0, 4_000),
+  };
+}
+
 async function optionalEmbedder(quiet = false): Promise<Embedder | undefined> {
   try {
     return await createEmbedder();
@@ -2504,6 +2581,125 @@ async function main(): Promise<number> {
             `${String(report.failed)} failed, ` +
             `took ${String(Math.round(report.durationMs / 1000))}s`,
         );
+      } finally {
+        db.close();
+      }
+    });
+
+  dev
+    .command("feedback")
+    .argument("<verdict>", "up or down")
+    .option("--note <text>", "what was wrong, in your own words")
+    .option("--question <text>", "the question this is about; defaults to the last one asked")
+    .description("Record whether the last answer was any good")
+    .action(async (verdict: string, options: { note?: string; question?: string }) => {
+      if (verdict !== "up" && verdict !== "down") {
+        logger.print("Use `up` or `down`.");
+        process.exitCode = 1;
+        return;
+      }
+
+      const { db } = openDatabase();
+
+      try {
+        const question = options.question ?? lastQuestion(db);
+
+        if (question === null) {
+          logger.print("Nothing to give feedback on. Ask something first.");
+          process.exitCode = 1;
+          return;
+        }
+
+        // A verdict with no trace is still worth recording. It is untestable by
+        // `dev eval`, which reports it as such rather than silently counting
+        // it, and it still says what somebody thought.
+        const recorded = recordFeedback(db, {
+          principalId: DEFAULT_PRINCIPAL,
+          verdict,
+          note: options.note ?? null,
+          trace: lastTrace(db, question) ?? {
+            at: Date.now(),
+            question,
+            surface: "cli",
+            tier: null,
+            model: null,
+            tools: [],
+            candidates: [],
+            answer: "",
+          },
+        });
+
+        const summary = feedbackSummary(db, DEFAULT_PRINCIPAL);
+
+        logger.print(
+          `Recorded. ${String(summary.up)} up, ${String(summary.down)} down, ` +
+            `${String(summary.withTrace)} replayable.`,
+        );
+        logger.print(`  trace: ${recorded.path}`);
+      } finally {
+        db.close();
+      }
+    });
+
+  dev
+    .command("eval")
+    .description("Replay recorded verdicts against the current build")
+    .option("--limit <n>", "how many cases", "200")
+    .option("--verbose", "list every case, not only the ones that moved")
+    .action(async (options: { limit?: string; verbose?: boolean }) => {
+      const { db } = openDatabase();
+
+      try {
+        const embedder = await optionalEmbedder();
+
+        // Retrieval reproduced through the same search the tools use. Not the
+        // answer: two runs produce two different sentences and comparing them
+        // would measure a model's phrasing rather than this codebase.
+        const report = runEval(
+          db,
+          DEFAULT_PRINCIPAL,
+          (question) => {
+            const hits = search(
+              db,
+              { query: question, limit: 20, principal: DEFAULT_PRINCIPAL },
+              embedder,
+            );
+
+            return hits.map((hit) => `item:${hit.item.id}`);
+          },
+          { limit: Number.parseInt(options.limit ?? "200", 10) },
+        );
+
+        for (const entry of report.cases) {
+          const moved = entry.outcome !== "held" && entry.outcome !== "still_failing";
+
+          if (!moved && options.verbose !== true) {
+            continue;
+          }
+
+          logger.print(`[${entry.outcome}] ${entry.question}`);
+
+          for (const ref of entry.lost.slice(0, 5)) {
+            logger.print(`   lost:   ${ref}`);
+          }
+
+          for (const ref of entry.gained.slice(0, 5)) {
+            logger.print(`   gained: ${ref}`);
+          }
+        }
+
+        logger.print("");
+        logger.print(
+          `${String(report.held)} held, ${String(report.regressed)} regressed, ` +
+            `${String(report.stillFailing)} still failing, ${String(report.changed)} changed, ` +
+            `${String(report.untestable)} untestable`,
+        );
+
+        // A regression on an approved case is the only unambiguous signal here,
+        // so it is the only one that fails the command.
+        if (report.regressed > 0) {
+          process.exitCode = 1;
+        }
       } finally {
         db.close();
       }

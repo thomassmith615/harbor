@@ -51,6 +51,22 @@ export interface LinkerContext {
   readonly terms: TermIndex;
   /** Everyone on a node, the user excluded. Cached by the caller. */
   entitiesOf(node: GraphNode): ReadonlySet<string>;
+  /**
+   * Anchors of one kind on a node. Cached by the caller.
+   *
+   * The two linkers added below judge on anchors rather than on text, which is
+   * the whole point of them: a place id and a time interval are keys two nodes
+   * can share when they share no word.
+   */
+  anchorsOf(node: GraphNode, kind: string): readonly StoredAnchor[];
+}
+
+/** Enough of an anchor for a linker to judge on. */
+export interface StoredAnchor {
+  readonly value: string;
+  readonly display: string;
+  readonly startsAt: number | null;
+  readonly endsAt: number | null;
 }
 
 /**
@@ -524,11 +540,168 @@ const adjacent: PairLinker = {
   },
 };
 
+/**
+ * Two nodes about the same place.
+ *
+ * The edge that could not be drawn before places were entities, and the clean
+ * illustration of why the graph was empty. A group chat saying "the bar" and a
+ * confirmation saying "Great American Pub" share no token; both words are three
+ * letters, below the term index floor, so neither could be a token even if they
+ * matched. Every existing linker judged on a shared word, a shared person or a
+ * shared identifier, so every existing linker correctly rejected the pair.
+ *
+ * Once both anchors hold the same place id there is something to join on, and
+ * the evidence line says the venue rather than saying "similar".
+ *
+ * A window still applies. Two visits to the same bar four months apart are two
+ * evenings, and saying otherwise would make a favourite pub into a single
+ * enormous situation.
+ */
+const SAME_PLACE_WINDOW_MS = 3 * 86_400_000;
+
+const samePlace: PairLinker = {
+  id: "same_place",
+  judge(subject, candidate, context) {
+    const mine = context.anchorsOf(subject, "venue");
+    const theirs = context.anchorsOf(candidate.node, "venue");
+
+    // Resolved places only. An unresolved anchor still holds a phrase like
+    // "the bar", which half the conversations in the store contain and which
+    // identifies nothing.
+    const shared = mine.find(
+      (anchor) =>
+        anchor.value.startsWith("e_") &&
+        theirs.some((other) => other.value === anchor.value),
+    );
+
+    if (shared === undefined) {
+      return null;
+    }
+
+    const gap = Math.abs(candidate.node.occurredAt - subject.occurredAt);
+
+    if (gap > SAME_PLACE_WINDOW_MS) {
+      return {
+        rejected: `both about ${shared.display}, but ${describeGap(gap)} apart, so two visits`,
+      };
+    }
+
+    return {
+      edge: {
+        from: subject.ref,
+        to: candidate.node.ref,
+        kind: "about_same",
+        confidence: 0.7,
+        evidence: `both about ${shared.display}, ${describeGap(gap)} apart`,
+        detector: "same_place",
+      },
+    };
+  },
+};
+
+/**
+ * Two nodes stating the same time of day.
+ *
+ * The other key that did not exist, and the one that reaches furthest. A
+ * conversation that says "later" and a confirmation that says 8:00 PM share no
+ * word, no person, no place and no identifier, and one of them is plainly an
+ * answer to the other.
+ *
+ * The asymmetry is the quality control and it is the same rule the plan layer
+ * uses: a narrow interval falling inside a wide one is an answer, and two wide
+ * intervals overlapping is a coincidence. Every plan on a Thursday evening
+ * overlaps every other plan on that Thursday evening, so overlap alone must
+ * never be sufficient.
+ *
+ * And it needs a second, non-temporal reason. A dozen nodes state an hour on
+ * any given evening and most of them are newsletters. A shared person or a
+ * shared place is what separates "these describe the same time" from "these
+ * describe the same time and are about each other".
+ */
+const NARROW_MS = 2 * 3_600_000;
+
+const sameOccasion: PairLinker = {
+  id: "same_occasion",
+  judge(subject, candidate, context) {
+    const mine = context.anchorsOf(subject, "time_hint");
+    const theirs = context.anchorsOf(candidate.node, "time_hint");
+
+    if (mine.length === 0 || theirs.length === 0) {
+      return null;
+    }
+
+    let answer: { open: StoredAnchor; stated: StoredAnchor } | null = null;
+
+    for (const a of mine) {
+      for (const b of theirs) {
+        if (a.startsAt === null || a.endsAt === null || b.startsAt === null || b.endsAt === null) {
+          continue;
+        }
+
+        const [open, stated] = a.endsAt - a.startsAt >= b.endsAt - b.startsAt ? [a, b] : [b, a];
+
+        const openWidth = (open.endsAt ?? 0) - (open.startsAt ?? 0);
+        const statedWidth = (stated.endsAt ?? 0) - (stated.startsAt ?? 0);
+
+        if (statedWidth >= openWidth || statedWidth > NARROW_MS) {
+          continue;
+        }
+
+        const middle = (stated.startsAt ?? 0) + statedWidth / 2;
+
+        if (middle >= (open.startsAt ?? 0) && middle <= (open.endsAt ?? 0)) {
+          answer = { open, stated };
+        }
+      }
+    }
+
+    if (answer === null) {
+      return null;
+    }
+
+    const people = sharedPeople(subject, candidate.node, context);
+
+    const place = context
+      .anchorsOf(subject, "venue")
+      .find(
+        (anchor) =>
+          anchor.value.startsWith("e_") &&
+          context.anchorsOf(candidate.node, "venue").some((other) => other.value === anchor.value),
+      );
+
+    if (people.length === 0 && place === undefined) {
+      return {
+        rejected:
+          "both state the same time, but nothing else connects them, and a dozen " +
+          "things state a time on any given evening",
+      };
+    }
+
+    const because =
+      place === undefined
+        ? `and both involve ${String(people.length)} of the same people`
+        : `and both are about ${place.display}`;
+
+    return {
+      edge: {
+        from: subject.ref,
+        to: candidate.node.ref,
+        kind: "arranges",
+        confidence: 0.75,
+        evidence: `one says "${answer.open.display}" and the other says "${answer.stated.display}", ${because}`,
+        detector: "same_occasion",
+      },
+    };
+  },
+};
+
 export const LINKERS: readonly PairLinker[] = [
   sameThread,
   sharesReference,
   arranges,
   tracks,
+  samePlace,
+  sameOccasion,
   aboutSame,
   adjacent,
 ];

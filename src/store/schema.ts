@@ -1804,6 +1804,41 @@ export const MIGRATIONS: readonly string[] = [
 
   CREATE INDEX propositions_episode ON propositions (episode_id);
   `,
+
+  // Verdicts on answers, and the traces behind them.
+  //
+  // Every judgment in this store so far has been an argument. Thresholds,
+  // windows, floors, and which linker fires on what were all reasoned about
+  // carefully and none of them were ever measured, because there was nothing to
+  // measure against. A thumb is the cheapest possible ground truth and the only
+  // one a single user can produce at any volume.
+  //
+  // The verdict is here and the trace is on disk beside it; see
+  // surfaces/feedback.ts for why. What is deliberately absent is any path from
+  // this table into scoring. A system that reweights on its own past outputs
+  // learns its own habits, and at this volume there is nothing to fit anyway.
+  // These rows are a test set, not a training signal.
+  `
+  CREATE TABLE feedback (
+    id            TEXT PRIMARY KEY,
+    principal_id  TEXT NOT NULL REFERENCES people (id),
+    -- What was asked, as the person typed it.
+    question      TEXT NOT NULL,
+    verdict       TEXT NOT NULL CHECK (verdict IN ('up', 'down')),
+    -- Free text, when somebody says what was wrong. Usually null.
+    note          TEXT,
+    -- Which surface, so a bad answer in the CLI is distinguishable from a bad
+    -- answer in the daemon.
+    surface       TEXT NOT NULL,
+    -- The line in the trace file holding what was retrieved and why.
+    trace_path    TEXT,
+    trace_offset  INTEGER,
+    created_at    INTEGER NOT NULL
+  );
+
+  CREATE INDEX feedback_recent ON feedback (principal_id, created_at DESC);
+  CREATE INDEX feedback_verdict ON feedback (principal_id, verdict);
+  `,
 ];
 
 /** The only principal that exists until household support lands. */

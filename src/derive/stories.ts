@@ -28,6 +28,8 @@ import { STORY_VERSION, detectFrames } from "./frames.js";
 import { gather } from "./gather.js";
 import { pairProposals } from "./situations.js";
 import { NoiseIndex } from "./noise.js";
+import { addAnchors, anchorsFor } from "../store/anchors.js";
+import { findPlace } from "../store/places.js";
 import { clockOf } from "./timing.js";
 import { TermIndex } from "./terms.js";
 import { NameIndex } from "./mentions.js";
@@ -307,6 +309,68 @@ function summaryOf(frame: Frame, tz: string): string | null {
   return `${who} going${where ?? ""}${when === null ? "" : ` at ${when}`}.`;
 }
 
+/**
+ * What the story layer learned, written back where the graph can see it.
+ *
+ * A plan says "the bar" and something else in the same evening says "Great
+ * American Pub", and the plan layer works out that those are one evening by
+ * resolving a time rather than by matching a word. That conclusion is real
+ * evidence and it was being thrown away: the graph, which judges pairs on keys
+ * they share, still saw two nodes with nothing in common.
+ *
+ * So the resolved place is added to the conversation as a second venue anchor,
+ * beside the phrase somebody actually wrote. "the bar" is still not a place and
+ * never becomes one; what is recorded is narrower and true: *this* conversation
+ * was about *this* venue, on the evidence of the thing that pinned its time
+ * down.
+ *
+ * The effect is that a conclusion reached once is available to every pass
+ * afterwards, and the next `relate` can draw an edge between a group chat and a
+ * reservation that share no word, no person and no identifier.
+ */
+function teachPlaces(db: DB, frames: readonly Frame[]): number {
+  let written = 0;
+
+  for (const frame of frames) {
+    const plan = frame.plan;
+
+    if (plan === undefined || plan.resolvedBy === null) {
+      continue;
+    }
+
+    const ref: NodeRef = { kind: "episode", id: plan.episodeId };
+    const held = anchorsFor(db, ref);
+
+    for (const phrase of plan.venuePhrases) {
+      const place = findPlace(db, phrase);
+
+      if (place === null) {
+        continue;
+      }
+
+      if (held.some((anchor) => anchor.kind === "venue" && anchor.value === place.entity.id)) {
+        continue;
+      }
+
+      written += addAnchors(db, ref, [
+        {
+          kind: "venue",
+          value: place.entity.id,
+          display: place.entity.displayName,
+          startsAt: null,
+          endsAt: null,
+          // Lower than a venue read directly out of text. This is a conclusion
+          // rather than a reading, and the difference should be visible to
+          // anything weighing it.
+          confidence: 0.65,
+        },
+      ]);
+    }
+  }
+
+  return written;
+}
+
 export function buildStories(db: DB, options: StoryOptions): StoryReport {
   const started = Date.now();
   const now = Date.now();
@@ -332,6 +396,14 @@ export function buildStories(db: DB, options: StoryOptions): StoryReport {
     since: options.since,
     timezone: options.timezone,
   });
+
+  const taught = teachPlaces(db, detected.frames);
+
+  if (taught > 0) {
+    options.onNote?.(
+      `${String(taught)} conversations now name the place their plan resolved to`,
+    );
+  }
 
   if (detected.frames.length === 0) {
     options.onNote?.("nothing in the calendar looks like a journey or an occasion yet");
@@ -590,6 +662,14 @@ export function explainStory(
     since: options.since,
     timezone: options.timezone,
   });
+
+  const taught = teachPlaces(db, detected.frames);
+
+  if (taught > 0) {
+    options.onNote?.(
+      `${String(taught)} conversations now name the place their plan resolved to`,
+    );
+  }
 
   const members = db
     .prepare(`SELECT node_kind, node_id FROM story_nodes WHERE story_id = ? AND role = 'spine'`)
