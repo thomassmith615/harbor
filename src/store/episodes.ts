@@ -392,6 +392,9 @@ export interface PendingEpisode {
   readonly id: string;
   readonly title: string | null;
   readonly transcript: string;
+  /** For the window header: who was in it and when it happened. */
+  readonly startsAt: number;
+  readonly participants: readonly string[];
 }
 
 export function pendingEpisodes(
@@ -399,14 +402,28 @@ export function pendingEpisodes(
   pipelineVersion: number,
   limit: number,
 ): readonly PendingEpisode[] {
-  return db
+  const rows = db
     .prepare(
-      `SELECT id, title, transcript FROM episodes
+      `SELECT id, title, transcript, starts_at, participants FROM episodes
        WHERE derived_version IS NULL OR derived_version <> @version
        ORDER BY ends_at DESC
        LIMIT @limit`,
     )
-    .all({ version: pipelineVersion, limit }) as PendingEpisode[];
+    .all({ version: pipelineVersion, limit }) as {
+    id: string;
+    title: string | null;
+    transcript: string;
+    starts_at: number;
+    participants: string;
+  }[];
+
+  return rows.map((row) => ({
+    id: row.id,
+    title: row.title,
+    transcript: row.transcript,
+    startsAt: row.starts_at,
+    participants: JSON.parse(row.participants) as string[],
+  }));
 }
 
 export function countPendingEpisodes(db: DB, pipelineVersion: number): number {

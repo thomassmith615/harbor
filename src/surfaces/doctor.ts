@@ -17,6 +17,7 @@
  * problem without a next step just moves the work.
  */
 import { closeSync, existsSync, openSync, readdirSync, readSync, statSync } from "node:fs";
+import { affixNote } from "../derive/embed/affixes.js";
 import { keyOpens } from "../kernel/db.js";
 import { readSecret } from "../kernel/keychain.js";
 import type { KeySource } from "../kernel/encryption.js";
@@ -424,6 +425,52 @@ export interface DoctorReport {
   readonly warnings: number;
 }
 
+/**
+ * Which embedding convention the store was written under.
+ *
+ * Worth a line in `doctor` because getting it wrong is silent. An asymmetric
+ * model given no prefix returns vectors, the index builds, search runs, and
+ * every answer is slightly off with nothing anywhere reporting a problem. The
+ * other half of the check is mixed vintages: vectors written before the
+ * prefixes existed are not comparable with vectors written after, so an index
+ * holding both ranks two populations against each other.
+ */
+function checkEmbedding(db: DB): readonly Finding[] {
+  const model = (
+    db.prepare(`SELECT model FROM embeddings LIMIT 1`).get() as { model: string } | undefined
+  )?.model;
+
+  if (model === undefined) {
+    return [];
+  }
+
+  const versions = db
+    .prepare(`SELECT DISTINCT pipeline_version AS version FROM chunks ORDER BY version`)
+    .all() as { version: number }[];
+
+  const findings: Finding[] = [
+    {
+      area: "embedding",
+      severity: "ok",
+      detail: `${model}: ${affixNote(model)}`,
+      fix: null,
+    },
+  ];
+
+  if (versions.length > 1) {
+    findings.push({
+      area: "embedding",
+      severity: "warn",
+      detail:
+        `chunks exist under ${String(versions.length)} pipeline versions, so vectors ` +
+        "written under different conventions are being ranked against each other",
+      fix: "harbor dev derive --rebuild",
+    });
+  }
+
+  return findings;
+}
+
 export async function doctor(db: DB, now: number = Date.now()): Promise<DoctorReport> {
   // Which key is actually in use, not merely which one exists. The difference
   // decides whether the daemon can start, and it is the thing `doctor` is for.
@@ -438,6 +485,7 @@ export async function doctor(db: DB, now: number = Date.now()): Promise<DoctorRe
     ...checkBackups(),
     ...checkDisk(),
     ...checkSchedule(db, now),
+    ...checkEmbedding(db),
   ];
 
   return {

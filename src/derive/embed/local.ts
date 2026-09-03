@@ -8,6 +8,7 @@
  */
 import { ConfigurationError } from "../../kernel/errors.js";
 import { normalize } from "./types.js";
+import { affixesFor, applyAffix } from "./affixes.js";
 import type { Embedder } from "./types.js";
 
 const DEFAULT_MODEL = "Xenova/bge-small-en-v1.5";
@@ -71,5 +72,13 @@ export async function localEmbedder(model?: string): Promise<Embedder> {
   const probe = await embed(["harbor dimension probe"]);
   dims = probe[0]?.length ?? dims;
 
-  return { id: `local:${name}`, model: name, dims, embed };
+  const affixes = affixesFor(name);
+
+  return {
+    id: `local:${name}`,
+    model: name,
+    dims,
+    embed: (texts) => embed(applyAffix(affixes.document, texts)),
+    embedQuery: (texts) => embed(applyAffix(affixes.query, texts)),
+  };
 }

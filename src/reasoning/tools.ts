@@ -1301,7 +1301,7 @@ export async function runTool(
 
     if (query !== undefined && query.trim().length > 0 && context.embedder !== undefined) {
       try {
-        queryVector = (await context.embedder.embed([query]))[0];
+        queryVector = (await context.embedder.embedQuery([query]))[0];
       } catch {
         // An embedding backend that has gone away should degrade search, not
         // break it. The reasons on each hit will show keyword-only matching.

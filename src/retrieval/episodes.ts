@@ -192,7 +192,7 @@ export async function searchEpisodes(
   let vectors: readonly string[] = [];
 
   if (params.embedder !== undefined) {
-    const embedded = (await params.embedder.embed([params.query]))[0];
+    const embedded = (await params.embedder.embedQuery([params.query]))[0];
 
     if (embedded !== undefined) {
       vectors = semantic(db, scope, embedded, params.embedder, CANDIDATE_DEPTH);

@@ -743,7 +743,7 @@ async function route(
     const vector =
       embedder === undefined || text === undefined
         ? undefined
-        : (await embedder.embed([text]))[0];
+        : (await embedder.embedQuery([text]))[0];
 
     const kinds = query.get("kinds")?.split(",").filter((kind) => kind.length > 0);
 
@@ -1400,7 +1400,8 @@ async function route(
       const embedder = await embedderOrUndefined();
 
       if (embedder !== undefined) {
-        const vector = (await embedder.embed([statement.trim()]))[0];
+        // A standing query. See the note on the same call in the CLI.
+        const vector = (await embedder.embedQuery([statement.trim()]))[0];
 
         if (vector !== undefined) {
           saveInterestEmbedding(db, record.id, embedder.model, toBlob(vector));

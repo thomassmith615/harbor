@@ -435,6 +435,48 @@ answer. A wrong name on one is a false statement about somebody's evening.
 `src/fixtures/bar-night.ts` is the scenario written down, and half its
 assertions are memberships it forbids.
 
+## Vectors
+
+Two defects sat in this layer for a long time, both of the kind that produce a
+working system rather than a broken one, which is why neither was noticed.
+
+**Prefixes.** Most retrieval embedding models are asymmetric: they were trained
+with an instruction on one side of the pair and expect it at inference. Nomic
+requires `search_query:` and `search_document:`; BGE wants an instruction on the
+query only; E5 wants both, spelled differently. Harbor sent neither, for either
+embedder, so every search ever run embedded the question as though it were a
+stored passage. Nothing failed. Every answer was slightly off. `affixes.ts` is a
+table rather than a constant because getting it wrong for a new model should be
+a one-line correction, and an unrecognised model gets no prefix, since a
+symmetric model given one is worse off than a model left alone.
+
+**Windows.** A conversation was embedded by cutting its transcript every two
+thousand characters. That is arbitrary twice: it cuts mid-message, so a window
+can open halfway through an answer to a question it does not contain, and at
+that size it averages three subjects into one vector. A group chat that arranged
+an evening, discussed a phone charger and mentioned somebody's sister produced
+three slabs, each a blend of all three, none a good match for a question about
+any of them. Windows are now runs of whole lines around six hundred characters
+with two lines of overlap, and every one carries a header naming the
+conversation, its participants and the date. A window from the middle of a
+thread used to embed as anonymous prose: `yeah I'm going`, with no indication of
+who said it or when.
+
+Windows are still the participants' own words. Rewriting short messages into
+standalone statements is a real further improvement and a different kind of
+thing, because it needs a model and it produces text nobody wrote.
+
+## Constrained decoding
+
+`verification: "schema"` used to mean the output was checked afterwards.
+Checking is a filter: a malformed reply is discarded, the work is lost, the pass
+records nothing, and the task escalates a tier, so an unparseable local reply
+was paid for twice. Every local server can be told the shape up front instead,
+and then a malformed reply is not something to handle but something the sampler
+cannot emit. A 4B model with a grammar beats a much larger one without one here,
+because the failure being removed is a formatting failure rather than a
+reasoning failure. `json.ts` stays for servers that ignore the ask.
+
 ## The graph
 
 An edge joins two **nodes**, and a node is an item or an episode. That

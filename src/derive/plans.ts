@@ -57,6 +57,7 @@
 import { createHash } from "node:crypto";
 import { narrowest, timeHintsIn, type TimeHint } from "./timing.js";
 import { route } from "../reasoning/router.js";
+import { schemaFor } from "../reasoning/schemas.js";
 import type { DB } from "../kernel/db.js";
 import type { Anchor } from "./anchors.js";
 
@@ -589,7 +590,16 @@ export async function refinePlan(
   const routed = await route(
     db,
     "extract.structured",
-    { system: SYSTEM, messages: [{ role: "user", content: transcript }] },
+    {
+      system: SYSTEM,
+      messages: [{ role: "user", content: transcript }],
+      // The roster shape, not the generic envelope. Every entry in `going` is
+      // required to carry the words it came from, so a local server with
+      // constrained decoding cannot emit a name without a quote to check it
+      // against, and the verification below stops being the only thing
+      // standing between a model's guess and somebody's evening.
+      schema: schemaFor("extract.plan"),
+    },
     { principalId, pipelineVersion: PLAN_VERSION },
   );
 

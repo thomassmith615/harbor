@@ -12,8 +12,16 @@
  * the body.
  */
 
-/** Bump to re-derive everything. Chunking or embedding changes both count. */
-export const PIPELINE_VERSION = 2;
+/**
+ * Bump to re-derive everything. Chunking or embedding changes both count.
+ *
+ * 3: query and document prefixes, and conversation windows. Both change what a
+ * vector means rather than merely how it was produced, so vectors written under
+ * 2 are not comparable with vectors written under 3 and a mixed index would
+ * rank the two populations against each other. This is the version that has to
+ * move for that not to happen quietly.
+ */
+export const PIPELINE_VERSION = 3;
 
 const TARGET_CHARS = 1_200;
 const OVERLAP_CHARS = 150;

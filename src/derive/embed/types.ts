@@ -22,12 +22,25 @@ export interface Embedder {
   readonly dims: number;
 
   /**
-   * Embeds a batch. Returns one vector per input, in order.
+   * Embeds a batch of things being stored. Returns one vector per input.
    *
    * Batching is the caller's lever for throughput; implementations should send
    * the batch as one request where the backend supports it.
+   *
+   * Named for the document side because that is what almost every caller is
+   * doing, and because a single `embed` that silently treated a question like a
+   * stored passage is the defect `affixes.ts` exists to fix. Keeping one method
+   * would have meant every future caller had to remember which side it was on.
    */
   embed(texts: readonly string[]): Promise<readonly Float32Array[]>;
+
+  /**
+   * Embeds things being searched *for*.
+   *
+   * Different from `embed` on an asymmetric model and identical on a symmetric
+   * one. Callers do not need to know which they have.
+   */
+  embedQuery(texts: readonly string[]): Promise<readonly Float32Array[]>;
 }
 
 /** Cosine similarity. Vectors are normalized on write, so this is a dot product. */

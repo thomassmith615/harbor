@@ -20,6 +20,7 @@ import { createHash } from "node:crypto";
 import { anthropicProvider } from "./provider.js";
 import { localModelFor, localProvider } from "./local.js";
 import { costMicros, taskClass, TIERS } from "./tasks.js";
+import { schemaFor } from "./schemas.js";
 import { record } from "../store/audit.js";
 import type { DB } from "../kernel/db.js";
 import type { CompletionRequest, CompletionResult, Provider } from "./provider.js";
@@ -292,6 +293,19 @@ export async function route(
   const task = taskClass(taskClassId);
   const version = options.pipelineVersion ?? 1;
 
+  // A task class that declares schema verification gets its schema attached
+  // here rather than at every call site.
+  //
+  // Doing it centrally is the point: `verification: "schema"` is a promise the
+  // task class makes, and until now the only thing keeping that promise was a
+  // parser downstream. A caller with a shape of its own passes `schema` and
+  // that wins, which is how `plans.ts` constrains a roster the generic
+  // envelope knows nothing about.
+  const constrained: CompletionRequest =
+    request.schema !== undefined || task.verification !== "schema"
+      ? request
+      : { ...request, ...(schemaFor(taskClassId) === undefined ? {} : { schema: schemaFor(taskClassId) }) };
+
   if (task.cacheable) {
     const key = cacheKey(taskClassId, request, version, modelFingerprint());
 
@@ -326,7 +340,7 @@ export async function route(
   const provider = specFor(tier).create();
 
   const payload: CompletionRequest = {
-    ...request,
+    ...constrained,
     ...(task.maxTokens === undefined ? {} : { maxTokens: task.maxTokens }),
   };
 

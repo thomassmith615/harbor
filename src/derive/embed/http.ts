@@ -15,6 +15,7 @@
  */
 import { ConfigurationError, UpstreamError } from "../../kernel/errors.js";
 import { normalize } from "./types.js";
+import { affixesFor, applyAffix } from "./affixes.js";
 import type { Embedder } from "./types.js";
 
 const DEFAULT_URL = "http://127.0.0.1:11434/v1/embeddings";
@@ -127,10 +128,15 @@ export async function httpEmbedder(options: HttpEmbedderOptions = {}): Promise<E
     throw new UpstreamError("Embedding server returned an empty vector");
   }
 
+  // Resolved once, from the model name, so the two sides of every pair are
+  // guaranteed to have been embedded under the same convention.
+  const affixes = affixesFor(model);
+
   return {
     id: `http:${url}`,
     model,
     dims,
-    embed: request,
+    embed: (texts) => request(applyAffix(affixes.document, texts)),
+    embedQuery: (texts) => request(applyAffix(affixes.query, texts)),
   };
 }

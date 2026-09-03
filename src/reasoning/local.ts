@@ -128,6 +128,31 @@ export function localProvider(model?: string): Provider {
             think: false,
             enable_thinking: false,
             chat_template_kwargs: { enable_thinking: false },
+            // Constrained decoding, in the three spellings that cover the
+            // servers people actually run.
+            //
+            // `format` is Ollama's, and it takes a JSON schema directly.
+            // `response_format` is the OpenAI shape, which LM Studio and recent
+            // llama.cpp builds accept. `json_schema` at the top level is
+            // llama.cpp's own. A server ignores the keys it does not know, so
+            // sending all three costs a few bytes and covers every setup
+            // without probing for one.
+            //
+            // What this changes: a reply that violates the schema stops being
+            // something `json.ts` has to repair and becomes something the
+            // sampler cannot produce. The repair path stays, because an older
+            // server will ignore all three of these and behave exactly as it
+            // did before.
+            ...(request.schema === undefined
+              ? {}
+              : {
+                  format: request.schema,
+                  json_schema: request.schema,
+                  response_format: {
+                    type: "json_schema",
+                    json_schema: { name: "harbor", strict: false, schema: request.schema },
+                  },
+                }),
           }),
         });
       } catch (cause: unknown) {

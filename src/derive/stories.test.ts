@@ -887,7 +887,13 @@ describe("one picture, not several", () => {
     // similarity, so an embedder that declines is the honest stand-in.
     await derive(
       extra.db,
-      { id: "none", model: "none", dims: 16, embed: (texts) => Promise.resolve(texts.map(() => new Float32Array(16))) },
+      {
+        id: "none",
+        model: "none",
+        dims: 16,
+        embed: (texts) => Promise.resolve(texts.map(() => new Float32Array(16))),
+        embedQuery: (texts) => Promise.resolve(texts.map(() => new Float32Array(16))),
+      },
       {},
     );
     resolveEntities(extra.db, {});
@@ -1171,7 +1177,13 @@ describe("what is coming", () => {
   async function assemble(extra: TestStore): Promise<void> {
     await derive(
       extra.db,
-      { id: "none", model: "none", dims: 16, embed: (texts) => Promise.resolve(texts.map(() => new Float32Array(16))) },
+      {
+        id: "none",
+        model: "none",
+        dims: 16,
+        embed: (texts) => Promise.resolve(texts.map(() => new Float32Array(16))),
+        embedQuery: (texts) => Promise.resolve(texts.map(() => new Float32Array(16))),
+      },
       {},
     );
     resolveEntities(extra.db, {});

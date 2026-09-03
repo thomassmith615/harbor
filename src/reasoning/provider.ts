@@ -15,6 +15,7 @@
  * ladder is cheap to build later.
  */
 import { ConfigurationError, UpstreamError } from "../kernel/errors.js";
+import type { JsonSchema } from "./schemas.js";
 
 export interface ToolSchema {
   readonly name: string;
@@ -53,6 +54,16 @@ export interface CompletionRequest {
   readonly messages: readonly Message[];
   readonly tools?: readonly ToolSchema[];
   readonly maxTokens?: number;
+  /**
+   * The shape the reply must take.
+   *
+   * Where a provider supports constrained decoding, this stops being a
+   * description and becomes an enforcement: the sampler cannot emit a token
+   * that breaks the schema, so a malformed reply is impossible rather than
+   * handled. Providers that do not support it ignore this, and the post-hoc
+   * repair in `json.ts` covers them exactly as it did before.
+   */
+  readonly schema?: JsonSchema | undefined;
 }
 
 export interface TokenUsage {

@@ -74,13 +74,8 @@ export function openTestStore(): TestStore {
  * depended on a model server being installed, and it would be skipped forever.
  */
 export function fixtureEmbedder(dims = 16): Embedder {
-  return {
-    id: "fixture",
-    model: "fixture",
-    dims,
-
-    async embed(texts: readonly string[]): Promise<readonly Float32Array[]> {
-      return texts.map((text) => {
+  const encode = (texts: readonly string[]): readonly Float32Array[] =>
+    texts.map((text) => {
         const vector = new Float32Array(dims);
 
         for (let index = 0; index < text.length; index += 1) {
@@ -100,8 +95,23 @@ export function fixtureEmbedder(dims = 16): Embedder {
           vector[index] = (vector[index] ?? 0) / magnitude;
         }
 
-        return vector;
-      });
+      return vector;
+    });
+
+  return {
+    id: "fixture",
+    model: "fixture",
+    dims,
+
+    async embed(texts: readonly string[]): Promise<readonly Float32Array[]> {
+      return encode(texts);
+    },
+
+    // Symmetric, deliberately. A fixture that applied different affixes to the
+    // two sides would make every test's vectors depend on the affix table,
+    // which is a real thing to test and not a thing to test everywhere.
+    async embedQuery(texts: readonly string[]): Promise<readonly Float32Array[]> {
+      return encode(texts);
     },
   };
 }

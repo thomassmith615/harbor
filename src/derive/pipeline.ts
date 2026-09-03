@@ -28,7 +28,9 @@ import {
   saveEmbedding,
 } from "../store/chunks.js";
 import { openVectorIndex, setIndexPipelineVersion } from "../retrieval/vector.js";
-import { conversationalStreamSet, MAX_EMBED_CHARS, segmentEpisodes } from "./episodes.js";
+import { conversationalStreamSet, segmentEpisodes } from "./episodes.js";
+import { windowsFor } from "./windows.js";
+import { timezone } from "../kernel/time.js";
 import {
   countPendingEpisodes,
   markEpisodeDerived,
@@ -60,6 +62,14 @@ const EMBED_CONCURRENCY = Math.max(
 );
 
 export interface DeriveOptions {
+  /**
+   * For the date on a conversation window's header.
+   *
+   * Defaults to the machine's, which is right on a single-user laptop and is
+   * still worth being able to override: a header that says the wrong day makes
+   * a window match the wrong question.
+   */
+  readonly timezone?: string | undefined;
   /** Stop after this many items. Omit for everything pending. */
   readonly limit?: number | undefined;
   /** Checked between batches. Returning true stops cleanly at a checkpoint. */
@@ -308,20 +318,22 @@ export async function derive(
 
     const writeEpisodeChunks = db.transaction(() => {
       for (const episode of batch) {
-        // One chunk per episode where the episode fits, which is most of them.
-        // Longer conversations are split rather than truncated: an episode is
-        // the unit of meaning, but an embedding model has a context window and
-        // a transcript that exceeds it produces no vector at all, which is
-        // worse than producing two.
-        const text = `${episode.title ?? ""}\n\n${episode.transcript}`.trim();
-        const parts: { ordinal: number; text: string }[] = [];
-
-        for (let offset = 0; offset < text.length; offset += MAX_EMBED_CHARS) {
-          parts.push({
-            ordinal: parts.length,
-            text: text.slice(offset, offset + MAX_EMBED_CHARS),
-          });
-        }
+        // Line-aligned, overlapping windows with a header on each, rather than
+        // the transcript cut every two thousand characters.
+        //
+        // The old split was arbitrary twice over. It cut mid-message, so a
+        // window could open halfway through an answer to a question it did not
+        // contain; and at two thousand characters it averaged three subjects
+        // into one vector, which is why a group chat that arranged an evening
+        // and discussed a phone charger matched questions about neither
+        // especially well. See `windows.ts`.
+        const parts = windowsFor({
+          title: episode.title,
+          transcript: episode.transcript,
+          participants: episode.participants,
+          startsAt: episode.startsAt,
+          timezone: options.timezone ?? timezone(),
+        }).map((window) => ({ ordinal: window.ordinal, text: window.text }));
 
         const chunks = replaceEpisodeChunks(db, episode.id, parts, PIPELINE_VERSION);
 

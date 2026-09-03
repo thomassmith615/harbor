@@ -3088,7 +3088,7 @@ async function main(): Promise<number> {
         const embedder = options.lexical === true ? undefined : await optionalEmbedder();
 
         const vector =
-          embedder === undefined ? undefined : (await embedder.embed([query]))[0];
+          embedder === undefined ? undefined : (await embedder.embedQuery([query]))[0];
 
         const hits = search(
           db,
@@ -3140,7 +3140,10 @@ async function main(): Promise<number> {
         const embedder = await optionalEmbedder();
 
         if (embedder !== undefined) {
-          const vector = (await embedder.embed([statement]))[0];
+          // An interest is a standing query, not a stored passage: it is
+          // compared against item vectors, so it belongs on the query side of
+          // an asymmetric model.
+          const vector = (await embedder.embedQuery([statement]))[0];
           if (vector !== undefined) {
             saveInterestEmbedding(db, record.id, embedder.model, toBlob(vector));
           }
