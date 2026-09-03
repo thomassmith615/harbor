@@ -178,6 +178,7 @@ test("pruning an episode that is cited", async (t) => {
         "episode_chunks",
         "episode_items",
         "facts",
+        "propositions",
       ]);
     } finally {
       store.close();

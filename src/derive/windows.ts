@@ -77,6 +77,16 @@ export interface WindowInput {
   readonly participants: readonly string[];
   readonly startsAt: number;
   readonly timezone: string;
+  /**
+   * Standalone rewrites of the short lines, keyed by line ordinal.
+   *
+   * Folded into the window that contains the line they rewrite, on their own
+   * line, so the window gains searchable content without losing the words
+   * somebody wrote. A window is embedded, not displayed, which is what makes
+   * this safe: see `propositions.ts` for why the rewrite is a retrieval key
+   * rather than a claim.
+   */
+  readonly propositions?: ReadonlyMap<number, string> | undefined;
 }
 
 export interface ConversationWindow {
@@ -123,11 +133,27 @@ function headerFor(input: WindowInput): string {
  * no content under it.
  */
 export function windowsFor(input: WindowInput): readonly ConversationWindow[] {
-  const lines = input.transcript.split("\n").filter((line) => line.trim().length > 0);
+  const raw = input.transcript.split("\n").filter((line) => line.trim().length > 0);
 
-  if (lines.length === 0) {
+  if (raw.length === 0) {
     return [];
   }
+
+  // Interleaved rather than appended. A rewrite belongs beside the message it
+  // rewrites, so that a window carrying "yeah I'm going" also carries the
+  // sentence that makes it findable, and a window that does not contain the
+  // message does not carry a sentence about it either.
+  const lines: string[] = [];
+
+  raw.forEach((line, ordinal) => {
+    lines.push(line);
+
+    const rewritten = input.propositions?.get(ordinal);
+
+    if (rewritten !== undefined) {
+      lines.push(`(${rewritten})`);
+    }
+  });
 
   const header = headerFor(input);
   const groups: string[][] = [];

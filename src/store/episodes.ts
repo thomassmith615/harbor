@@ -190,6 +190,17 @@ export function pruneEpisodes(
       db.prepare(`DELETE FROM episode_items WHERE episode_id = ?`).run(row.id);
       db.prepare(`DELETE FROM episodes_fts WHERE episode_id = ?`).run(row.id);
 
+      // Propositions go with the episode.
+      //
+      // Unlike a commitment, a proposition is not understanding worth keeping:
+      // it is a rewrite of a line in a transcript that no longer exists in that
+      // form, so repointing it would leave a retrieval key aimed at nothing.
+      // The rewrite pass regenerates it for whatever the new segmentation
+      // produced. Deleted explicitly rather than left to ON DELETE CASCADE so
+      // that this function remains the single readable account of what happens
+      // to an episode's children.
+      db.prepare(`DELETE FROM propositions WHERE episode_id = ?`).run(row.id);
+
       // Evidence and facts cite episodes.
       //
       // This is what was failing derive. Those two tables were added after

@@ -477,6 +477,70 @@ cannot emit. A 4B model with a grammar beats a much larger one without one here,
 because the failure being removed is a formatting failure rather than a
 reasoning failure. `json.ts` stays for servers that ignore the ask.
 
+## Entities that hold more than a name
+
+`entities` held a name, a kind and nothing else, `identifiers` could hold an
+email, a name or a handle and nothing else, and `facts` was restricted by its
+own prompt to the user: *never about anyone else in the conversation*. So Harbor
+could tell you Dave exists and nothing about him, could recognise a phone number
+perfectly well (`normalizePhone` has been in `nicknames.ts` since early on) and
+had nowhere to put it, and could learn that the user does not eat pork but not
+that Dave does not.
+
+**Attributes carry provenance.** `entity_attributes` holds a claim, its
+normalized form, where it was read and, where somebody wrote it, the words they
+used. Not columns on the entity row: a phone number is not a property, it is a
+claim with a source and a date, and the moment it is a column there is nowhere
+to record that it was read in a text from 2019 and has not been seen since. They
+accumulate rather than overwrite, because people have two numbers and an old one
+is not wrong, it is old.
+
+Nothing infers an attribute from behaviour. Emailing from a company domain does
+not mean somebody works there, and appearing together often does not make two
+people partners. A system that guesses those and states them is unsettling when
+it is right and damaging when it is wrong, so the only sources are structured
+data and first-person statements with the quote attached.
+
+**A place is an entity.** `places.ts` is eighty-eight US cities and is right for
+a journey, which goes to a city. An evening goes to a bar with a proper name no
+gazetteer will hold, and the old answer was to treat that name as an ordinary
+topic word. The cost showed up in the graph rather than in search: every linker
+judges on a shared word, a shared person or a shared identifier, and two nodes
+about the same bar under two names have none of the three. Once both carry the
+same place id it is a join on a primary key with an evidence line a person can
+check.
+
+A common noun is never a place. "the bar" is a reference, not a name, and a
+place entity called "the bar" would collect every unrelated evening in the store
+and then assert they were all at the same venue.
+
+**Names are matched phonetically, not semantically.** In vector space "Dave"
+sits as close to "Dan" as to "David", so semantics is the wrong tool here and
+makes recall worse in the way hardest to debug: the wrong person, confidently.
+Phonetic keys catch Caitlin against Kaitlyn; Jaro-Winkler catches Micheal
+against Michael. Keys are stored rather than computed at query time, because a
+similarity function called per query scans every name in the store.
+
+## Propositions
+
+The bits-and-pieces problem, stated precisely. "yeah I'm going" carries no
+distinctive term, so the term index cannot anchor it; it embeds close to every
+agreement anybody ever sent, so a vector cannot separate it; it shares no
+vocabulary with the evening it belongs to, so no linker can join it. Every
+retrieval mechanism fails on it for one underlying reason: the meaning is in the
+message plus what came before, and only one of those was being indexed.
+
+A proposition is that message rewritten with its context folded in: *Thomas
+agreed to go to the bar with Dave, Sam and Nina.* Findable by every mechanism
+the original defeated.
+
+It produces text nobody wrote, which is a real objection to a store whose whole
+discipline is checkable claims. The answer is that a proposition is never shown
+and never quoted. It is folded into the window that gets embedded and nowhere
+else; `source_line` sits beside it so every surface displays the original. The
+failure it leaves is a bad search result, which is visible and recoverable, not
+a false claim in an answer, which is neither.
+
 ## The graph
 
 An edge joins two **nodes**, and a node is an item or an episode. That

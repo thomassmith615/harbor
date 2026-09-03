@@ -30,6 +30,8 @@ import {
 import { openVectorIndex, setIndexPipelineVersion } from "../retrieval/vector.js";
 import { conversationalStreamSet, segmentEpisodes } from "./episodes.js";
 import { windowsFor } from "./windows.js";
+import { propositionsFor } from "../store/propositions.js";
+import { PROPOSITION_VERSION } from "./propositions.js";
 import { timezone } from "../kernel/time.js";
 import {
   countPendingEpisodes,
@@ -327,12 +329,20 @@ export async function derive(
         // into one vector, which is why a group chat that arranged an evening
         // and discussed a phone charger matched questions about neither
         // especially well. See `windows.ts`.
+        const rewrites = new Map(
+          propositionsFor(db, episode.id, PROPOSITION_VERSION).map((proposition) => [
+            proposition.ordinal,
+            proposition.text,
+          ]),
+        );
+
         const parts = windowsFor({
           title: episode.title,
           transcript: episode.transcript,
           participants: episode.participants,
           startsAt: episode.startsAt,
           timezone: options.timezone ?? timezone(),
+          propositions: rewrites,
         }).map((window) => ({ ordinal: window.ordinal, text: window.text }));
 
         const chunks = replaceEpisodeChunks(db, episode.id, parts, PIPELINE_VERSION);

@@ -1671,6 +1671,139 @@ export const MIGRATIONS: readonly string[] = [
 
   CREATE INDEX IF NOT EXISTS reactions_target ON reactions (stream_id, target_guid);
   `,
+
+  // Places, phone numbers, and things known about a person.
+  //
+  // Three changes with one cause. `entities` could hold a person, an
+  // organisation or the user, and nothing else; `identifiers` could hold an
+  // email, a name or a handle, and nothing else; and an entity could have no
+  // properties at all. So a venue was a string on an anchor, a phone number had
+  // nowhere to go, and Harbor could learn that the user does not eat pork but
+  // could not learn that Dave does not.
+  //
+  // The consequence for the graph is the reason this is worth a table rebuild.
+  // Every linker judges on shared vocabulary, a shared person, or a shared
+  // identifier, so two nodes about the same bar under two different names had
+  // nothing in common that any rule could see. "the bar" and "Great American
+  // Pub" become one key once a place is an entity with aliases, and then the
+  // match is an exact join rather than a fuzzy one, with an evidence line a
+  // person can check.
+  //
+  // Both CHECK constraints require a rebuild; SQLite cannot alter one in place.
+  // Children are parked and restored the way the stories rebuild does it.
+  `
+  PRAGMA foreign_keys = OFF;
+
+  CREATE TABLE identifiers_parked AS SELECT * FROM identifiers;
+  DROP TABLE identifiers;
+
+  CREATE TABLE entities_new (
+    id            TEXT PRIMARY KEY,
+    kind          TEXT NOT NULL CHECK (kind IN ('person', 'org', 'self', 'place')),
+    display_name  TEXT NOT NULL,
+    pinned        INTEGER NOT NULL DEFAULT 0,
+    merged_into   TEXT REFERENCES entities (id),
+    created_at    INTEGER NOT NULL,
+    updated_at    INTEGER NOT NULL
+  );
+
+  INSERT INTO entities_new SELECT * FROM entities;
+
+  DROP TABLE entities;
+  ALTER TABLE entities_new RENAME TO entities;
+
+  CREATE INDEX entities_merged ON entities (merged_into);
+  CREATE INDEX entities_kind   ON entities (kind, display_name);
+
+  CREATE TABLE identifiers (
+    id           TEXT PRIMARY KEY,
+    entity_id    TEXT NOT NULL REFERENCES entities (id),
+    kind         TEXT NOT NULL CHECK (kind IN ('email', 'name', 'handle', 'phone')),
+    value        TEXT NOT NULL,
+    normalized   TEXT NOT NULL,
+    confidence   REAL NOT NULL,
+    occurrences  INTEGER NOT NULL DEFAULT 0,
+    first_seen   INTEGER,
+    last_seen    INTEGER,
+    UNIQUE (kind, normalized)
+  );
+
+  INSERT INTO identifiers SELECT * FROM identifiers_parked;
+  DROP TABLE identifiers_parked;
+
+  CREATE INDEX identifiers_entity ON identifiers (entity_id);
+
+  PRAGMA foreign_keys = ON;
+
+  -- What is known about an entity, and where it was read.
+  --
+  -- Deliberately not columns on the entities row. A phone number is not a
+  -- property of a row: it is a claim with a source, a date and a quote, and the
+  -- moment it is a column there is nowhere to record that Harbor read it in a
+  -- text from somebody else in 2019 and has not seen it since. Every other
+  -- derived claim in the store carries its provenance and these must too: a
+  -- standing fact about a person colours every sentence written about them
+  -- afterwards and a wrong one does damage for months before anybody notices.
+  --
+  -- UNIQUE is on (entity, kind, normalized) rather than (entity, kind): people
+  -- have two numbers, three addresses and more than one employer over time.
+  -- Superseding is a decision for the reader, which is what last_seen_at is for.
+  CREATE TABLE entity_attributes (
+    id            TEXT PRIMARY KEY,
+    entity_id     TEXT NOT NULL REFERENCES entities (id),
+    kind          TEXT NOT NULL,
+    value         TEXT NOT NULL,
+    normalized    TEXT NOT NULL,
+    confidence    REAL NOT NULL,
+    -- 'stated' when somebody wrote it down, 'source' when a connector supplied
+    -- it, 'user' when a person typed it into Harbor. Never a bare guess.
+    origin        TEXT NOT NULL,
+    source_kind   TEXT,
+    source_id     TEXT,
+    quote         TEXT,
+    first_seen_at INTEGER NOT NULL,
+    last_seen_at  INTEGER NOT NULL,
+    occurrences   INTEGER NOT NULL DEFAULT 1,
+    UNIQUE (entity_id, kind, normalized)
+  );
+
+  CREATE INDEX entity_attributes_entity ON entity_attributes (entity_id, kind);
+  CREATE INDEX entity_attributes_value  ON entity_attributes (kind, normalized);
+
+  -- Sounds-like keys for names, so a lookup can reach a spelling it has never
+  -- seen. Populated by the entity pass; see phonetics.ts for why this is a
+  -- table of keys rather than a similarity function called at query time.
+  CREATE TABLE name_keys (
+    entity_id  TEXT NOT NULL REFERENCES entities (id),
+    key        TEXT NOT NULL,
+    source     TEXT NOT NULL,
+    PRIMARY KEY (entity_id, key, source)
+  );
+
+  CREATE INDEX name_keys_key ON name_keys (key);
+  `,
+
+  // Standalone rewrites of short messages.
+  //
+  // Indexed, never displayed. See derive/propositions.ts for the argument: the
+  // meaning of "yeah I'm going" is not in the message, it is in the message
+  // plus what came before, and only one of those was being indexed. The source
+  // line is stored beside the rewrite so anything surfacing a hit can show the
+  // words somebody actually wrote rather than the words a model produced.
+  `
+  CREATE TABLE propositions (
+    id          TEXT PRIMARY KEY,
+    episode_id  TEXT NOT NULL REFERENCES episodes (id) ON DELETE CASCADE,
+    ordinal     INTEGER NOT NULL,
+    source_line TEXT NOT NULL,
+    text        TEXT NOT NULL,
+    version     INTEGER NOT NULL,
+    created_at  INTEGER NOT NULL,
+    UNIQUE (episode_id, ordinal, version)
+  );
+
+  CREATE INDEX propositions_episode ON propositions (episode_id);
+  `,
 ];
 
 /** The only principal that exists until household support lands. */

@@ -11,7 +11,15 @@ import { createHash } from "node:crypto";
 import { fold, looksLikePhone, normalizePhone } from "../derive/nicknames.js";
 import type { DB } from "../kernel/db.js";
 
-export type EntityKind = "person" | "org" | "self";
+/**
+ * What an entity can be.
+ *
+ * `place` is the newest and the one that changes the graph rather than the
+ * display. A venue used to be a phrase on an anchor, so "the bar" and "Great
+ * American Pub" were two unrelated strings and no linker could see past that;
+ * as an entity it is one key both nodes point at. See `store/places.ts`.
+ */
+export type EntityKind = "person" | "org" | "self" | "place";
 export type IdentifierKind = "email" | "phone" | "name" | "handle";
 export type EntityRole = "author" | "participant" | "mentioned";
 

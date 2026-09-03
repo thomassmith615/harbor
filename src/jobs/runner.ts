@@ -17,6 +17,9 @@ import { resolveEntities } from "../derive/entities.js";
 import { relate } from "../derive/relate.js";
 import { anchorNodes, buildStories } from "../derive/stories.js";
 import { refinePlans } from "../derive/refine-plans.js";
+import { resolvePlaces } from "../derive/venues.js";
+import { extractAttributes, promoteIdentifiers } from "../derive/attributes.js";
+import { proposePropositions } from "../derive/propositions.js";
 import { nameStories } from "../derive/name-stories.js";
 import { buildCommitments } from "../derive/commitments.js";
 import { extractPurchases } from "../derive/extract.js";
@@ -50,6 +53,13 @@ export const JOB_TASKS = [
   "classify",
   "derive",
   "resolve",
+  // Places, name keys and what is known about people. Between resolving
+  // entities and building stories, because a venue that has become a place
+  // entity is a key the frame layer can use.
+  "attributes",
+  // Rewriting short messages so they stand alone. Costs a model call per
+  // conversation, so it is its own task rather than part of derive.
+  "propositions",
   "relate",
   "stories",
   "name-stories",
@@ -117,7 +127,9 @@ const DECLARED: Readonly<Record<JobTask, readonly JobTask[]>> = {
   // tables. Blocked by ingest and by resolution for the same reason relate is:
   // it asks who is on a conversation, and that answer must not be changing
   // underneath it.
-  stories: ["onboard", "pulse", "sync", "recent", "backfill", "resolve", "stories"],
+  attributes: ["onboard", "pulse", "sync", "recent", "backfill", "resolve", "attributes"],
+  propositions: ["onboard", "pulse", "derive", "propositions"],
+  stories: ["onboard", "pulse", "sync", "recent", "backfill", "resolve", "attributes", "stories"],
   // Reads stories and writes only their title and summary. Blocked by the pass
   // that builds them, and by itself.
   "name-stories": ["onboard", "pulse", "sync", "stories", "name-stories"],
@@ -634,6 +646,38 @@ async function run(db: DB, jobId: string, task: JobTask, context: JobContext): P
     return (
       `${String(outcome.edgesDrawn)} connections drawn, ` +
       `${String(outcome.threads.threads)} cross-source situations`
+    );
+  }
+
+  if (task === "attributes") {
+    // Places, name keys, and what is known about people.
+    //
+    // Before stories rather than after, because a venue anchor that resolves to
+    // a place entity is a key two nodes can share, and the frame layer is one
+    // of the things that wants to share it.
+    const places = resolvePlaces(db, {});
+    const stated = extractAttributes(db, {});
+    const promoted = promoteIdentifiers(db);
+
+    return (
+      `${String(places.resolved)} venues resolved (${String(places.created)} new places), ` +
+      `${String(places.namesKeyed)} names keyed, ` +
+      `${String(stated.written + promoted)} attributes recorded`
+    );
+  }
+
+  if (task === "propositions") {
+    const outcome = await proposePropositions(db, {
+      principalId: context.principalId,
+      shouldStop: () => stopped(db, jobId),
+      onNote: (message) => {
+        report(db, jobId, { note: message });
+      },
+    });
+
+    return (
+      `${String(outcome.written)} messages rewritten to stand alone ` +
+      `from ${String(outcome.read)} conversations, ${String(outcome.failed)} could not be read`
     );
   }
 
