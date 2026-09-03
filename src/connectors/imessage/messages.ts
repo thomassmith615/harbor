@@ -37,6 +37,7 @@ import { UpstreamError } from "../../kernel/errors.js";
 import { appleDate, extractText } from "./attributed.js";
 import { plausibleTime } from "../../store/items.js";
 import type { ItemUpsert } from "../../store/items.js";
+import type { ReactionUpsert } from "../types.js";
 import type { SelfHandle, SourceConnector, SyncBatch, SyncContext } from "../types.js";
 
 export function chatDbPath(): string {
@@ -166,8 +167,18 @@ interface MessageRow {
 }
 
 /**
- * `item_type` 0 is a real message. Everything else is a join, a leave, a rename,
- * or a tapback, which are noise in a store meant to answer questions.
+ * `item_type` 0 is a real message. Everything else is a join, a leave or a
+ * rename, which are noise in a store meant to answer questions.
+ *
+ * Tapbacks used to be filtered here too, by `associated_message_guid IS NULL`,
+ * on the same grounds. That was half right. A tapback is not a message and it
+ * is not noise either: liking the text that asked who is coming is how a large
+ * share of people answer it, and filtering it at the connector meant that
+ * answer was not merely unread but unrecoverable, because no pass downstream
+ * can find what was never written.
+ *
+ * They are read separately, by REACTIONS below, and stored beside the message
+ * they annotate rather than as messages of their own.
  */
 const QUERY = `
   SELECT
@@ -201,6 +212,78 @@ const QUERY = `
   ORDER BY m.ROWID
   LIMIT @limit
 `;
+
+/**
+ * Tapbacks in the same row range.
+ *
+ * `associated_message_type` is 2000 through 2005 for adding a reaction and
+ * 3000 through 3005 for removing one. Only the additions are read: a removal
+ * says a reaction that Harbor may never have seen is gone, and the store's
+ * answer to that is the same either way, which is to hold the latest reaction
+ * per person per message and let a later sync overwrite it.
+ *
+ * `associated_message_guid` is the target, prefixed in most versions with
+ * `p:0/` or `bp:` depending on whether the reaction is on a message or on part
+ * of one. The prefix is stripped rather than matched on, because it has
+ * changed across macOS releases and the guid after it has not.
+ */
+const REACTIONS = `
+  SELECT
+    m.ROWID                     AS rowid,
+    m.guid                      AS guid,
+    m.date                      AS date,
+    m.is_from_me                AS is_from_me,
+    m.associated_message_guid   AS target,
+    m.associated_message_type   AS reaction_type,
+    h.id                        AS handle
+  FROM message m
+  LEFT JOIN handle h ON h.ROWID = m.handle_id
+  WHERE m.ROWID > @cursor AND m.ROWID <= @ceiling
+    AND m.associated_message_guid IS NOT NULL
+    AND m.associated_message_type BETWEEN 2000 AND 2005
+  ORDER BY m.ROWID
+`;
+
+interface ReactionRow {
+  readonly rowid: number;
+  readonly date: number | null;
+  readonly is_from_me: number;
+  readonly target: string;
+  readonly reaction_type: number;
+  readonly handle: string | null;
+}
+
+const REACTION_KINDS: Readonly<Record<number, ReactionUpsert["kind"]>> = {
+  2000: "love",
+  2001: "like",
+  2002: "dislike",
+  2003: "laugh",
+  2004: "emphasize",
+  2005: "question",
+};
+
+function targetGuid(raw: string): string {
+  const slash = raw.lastIndexOf("/");
+
+  return slash === -1 ? raw : raw.slice(slash + 1);
+}
+
+function toReaction(row: ReactionRow): ReactionUpsert | null {
+  const kind = REACTION_KINDS[row.reaction_type];
+  const at = appleDate(row.date);
+
+  if (kind === undefined || at === null) {
+    return null;
+  }
+
+  return {
+    targetExternalId: targetGuid(row.target),
+    // Null is the user, the same convention `author` uses on an item.
+    author: row.is_from_me === 1 ? null : row.handle,
+    kind,
+    occurredAt: plausibleTime(at, Date.now()),
+  };
+}
 
 /** How far back an initial ingest reaches. Null means everything. */
 const BACKFILL_YEARS = Number.parseInt(process.env["HARBOR_IMESSAGE_YEARS"] ?? "5", 10);
@@ -387,6 +470,9 @@ async function* walk(context: SyncContext, cursor: string | null): AsyncGenerato
       let pastCeiling = false;
       let unreadable = 0;
 
+      // The row range this page covers, before the loop moves the cursor.
+      const from = rowid;
+
       for (const row of rows) {
         const item = toItem(context, row);
 
@@ -412,8 +498,23 @@ async function* walk(context: SyncContext, cursor: string | null): AsyncGenerato
 
       seen += rows.length;
 
+      // Reactions over the same range, read after the messages so that the two
+      // queries cannot disagree about where the page ended.
+      const reactions: ReactionUpsert[] = [];
+
+      for (const row of snap.db
+        .prepare(REACTIONS)
+        .all({ cursor: from, ceiling: rowid }) as ReactionRow[]) {
+        const reaction = toReaction(row);
+
+        if (reaction !== null) {
+          reactions.push(reaction);
+        }
+      }
+
       yield {
         upserts,
+        reactions,
         // The cursor is a row id, which is monotonic and never reused. Simpler
         // and more reliable than anything the networked sources offer. The
         // fingerprint rides along so the next pass can tell whether the file

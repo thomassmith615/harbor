@@ -1637,6 +1637,40 @@ export const MIGRATIONS: readonly string[] = [
   CREATE INDEX stories_recent ON stories (principal_id, span_starts_at DESC);
   CREATE INDEX stories_state  ON stories (principal_id, state, salience DESC);
   `,
+
+  // Reactions.
+  //
+  // A tapback was filtered at the connector on the grounds that it is not a
+  // message, which is true and was the wrong conclusion. Liking the text that
+  // asked who is coming is how a large share of people answer it, and dropping
+  // it at ingest meant that answer was not merely unread but unrecoverable:
+  // no pass downstream could find what had never been stored.
+  //
+  // Its own table rather than an item kind. A reaction is not a thing that
+  // happened to somebody; it is an annotation on something that did, and
+  // giving it a row in `items` would put it in search results, in the term
+  // index, in coverage counts and in every episode transcript as a line of its
+  // own. The one place it belongs is next to the message it is about, which is
+  // what `target_guid` is for.
+  `
+  CREATE TABLE IF NOT EXISTS reactions (
+    id            TEXT PRIMARY KEY,
+    stream_id     TEXT NOT NULL REFERENCES streams (id),
+    -- The source's own id for the message reacted to, not Harbor's. The target
+    -- may be ingested after the reaction, or never: a tapback on a message
+    -- older than the history window has nothing to attach to and is dropped
+    -- when the transcript is built rather than at write time.
+    target_guid   TEXT NOT NULL,
+    -- Who reacted. Null is the user; the same convention items use for author.
+    author        TEXT,
+    -- love, like, dislike, laugh, emphasize, question. Stored as read.
+    kind          TEXT NOT NULL,
+    occurred_at   INTEGER NOT NULL,
+    created_at    INTEGER NOT NULL
+  );
+
+  CREATE INDEX IF NOT EXISTS reactions_target ON reactions (stream_id, target_guid);
+  `,
 ];
 
 /** The only principal that exists until household support lands. */

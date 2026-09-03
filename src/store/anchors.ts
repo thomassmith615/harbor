@@ -63,6 +63,72 @@ export function replaceAnchors(db: DB, ref: NodeRef, anchors: readonly Anchor[])
   }
 }
 
+/**
+ * Adds anchors to a node without disturbing the ones already there.
+ *
+ * `replaceAnchors` is right for a derivation pass, which recomputes everything
+ * a node claims from its text and should therefore own the whole set. It is
+ * wrong for a second pass that adds to a first: the model refinement in
+ * `plans.ts` runs after anchoring, knows more about a transcript than the rules
+ * did, and knows nothing about the places, dates and topics the rules read out
+ * of it. Replacing would delete all of them.
+ *
+ * Higher confidence wins on a collision, which is what makes the refinement an
+ * improvement rather than a duplicate: the rules wrote a roster at 0.75 and the
+ * model writes the same name at 0.85.
+ */
+export function addAnchors(db: DB, ref: NodeRef, anchors: readonly Anchor[]): number {
+  const existing = new Map(
+    anchorsFor(db, ref).map((anchor) => [`${anchor.kind}:${anchor.value}`, anchor]),
+  );
+
+  const insert = db.prepare(
+    `INSERT OR REPLACE INTO node_anchors
+       (node_kind, node_id, kind, value, display, starts_at, ends_at, confidence)
+     VALUES (@nodeKind, @nodeId, @kind, @value, @display, @startsAt, @endsAt, @confidence)`,
+  );
+
+  let written = 0;
+
+  for (const anchor of anchors) {
+    const held = existing.get(`${anchor.kind}:${anchor.value}`);
+
+    if (held !== undefined && held.confidence >= anchor.confidence) {
+      continue;
+    }
+
+    insert.run({
+      nodeKind: ref.kind,
+      nodeId: ref.id,
+      kind: anchor.kind,
+      value: anchor.value,
+      display: anchor.display,
+      startsAt: anchor.startsAt,
+      endsAt: anchor.endsAt,
+      confidence: anchor.confidence,
+    });
+
+    written += 1;
+  }
+
+  return written;
+}
+
+/**
+ * Removes one kind of anchor from a node.
+ *
+ * Needed by the refinement, and only in one direction: a roster the model
+ * rewrote replaces the roster the rules read, because a name the model
+ * declined to quote is a name it is asserting does not belong, and leaving the
+ * rules' version underneath would mean the refinement could only ever add
+ * people to an evening and never take one off it.
+ */
+export function removeAnchorsOfKind(db: DB, ref: NodeRef, kind: AnchorKind): number {
+  return db
+    .prepare(`DELETE FROM node_anchors WHERE node_kind = ? AND node_id = ? AND kind = ?`)
+    .run(ref.kind, ref.id, kind).changes;
+}
+
 export function anchorsFor(db: DB, ref: NodeRef): readonly Anchor[] {
   const rows = db
     .prepare(`SELECT * FROM node_anchors WHERE node_kind = ? AND node_id = ?`)

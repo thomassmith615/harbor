@@ -28,6 +28,7 @@ import { STORY_VERSION, detectFrames } from "./frames.js";
 import { gather } from "./gather.js";
 import { pairProposals } from "./situations.js";
 import { NoiseIndex } from "./noise.js";
+import { clockOf } from "./timing.js";
 import { TermIndex } from "./terms.js";
 import { NameIndex } from "./mentions.js";
 import { NodeResolver, nodeKey } from "../store/nodes.js";
@@ -74,6 +75,10 @@ export interface StoryReport {
   readonly framesDetected: number;
   readonly trips: number;
   readonly occasions: number;
+  /** Evenings read out of conversation, with no calendar entry behind them. */
+  readonly plans: number;
+  /** Of those, how many something else in the store pinned to an hour. */
+  readonly plansResolved: number;
   readonly home: string | null;
   readonly storiesWritten: number;
   readonly carried: number;
@@ -96,6 +101,8 @@ export interface StoryReport {
 export function anchorNodes(
   db: DB,
   options: {
+    /** Without this a time of day is read in UTC, which is a different evening. */
+    readonly timezone?: string | undefined;
     readonly limit?: number | undefined;
     readonly shouldStop?: (() => boolean) | undefined;
     readonly onProgress?: ((done: number, total: number) => void) | undefined;
@@ -132,7 +139,7 @@ export function anchorNodes(
           continue;
         }
 
-        const anchors = anchorsOf(db, node, { terms, names });
+        const anchors = anchorsOf(db, node, { terms, names, timezone: options.timezone });
         replaceAnchors(db, ref, anchors);
         written += anchors.length;
       }
@@ -167,7 +174,10 @@ function salienceOf(
 ): number {
   const breadth = Math.min(0.8, (sources - 1) * 0.35);
   const size = Math.min(0.25, Math.log10(members + 1) * 0.15);
-  const weight = kind === "trip" ? 0.3 : 0;
+  // A trip reorganises a week and outranks everything. A plan is tonight, and
+  // "tonight" is worth more than a dentist appointment in November precisely
+  // because it is about to happen, which the nearness term already says.
+  const weight = kind === "trip" ? 0.3 : kind === "plan" ? 0.1 : 0;
 
   // Symmetric around now: a trip next week matters as much as one last week,
   // and more than one six months ago in either direction.
@@ -259,11 +269,50 @@ function settleCompetition(results: readonly GatherResult[]): ReadonlyMap<string
   return assigned;
 }
 
+/**
+ * The one sentence a plan is worth.
+ *
+ * Written from the frame's own fields and nothing else, so every clause in it
+ * has a member underneath it that a person can open. "A group is going" would
+ * be a summary; "Dave Mullen, Sam Ortiz and you, 8:00 PM" is a claim with
+ * evidence attached to each half of it.
+ */
+function summaryOf(frame: Frame, tz: string): string | null {
+  const plan = frame.plan;
+
+  // Any frame carrying a plan, not only a frame whose kind is plan. When the
+  // calendar also knows about the evening the occasion wins the spine and
+  // absorbs the roster, and dropping the sentence at that point would mean the
+  // better evidenced version of a story says less than the thinner one.
+  if (plan === undefined) {
+    return null;
+  }
+
+  const names = plan.going.filter((person) => !person.id.startsWith("name:me"));
+  const listed = names.map((person) => (person.name.toLowerCase() === "me" ? "you" : person.name));
+
+  const who =
+    listed.length === 0
+      ? "You"
+      : listed.length === 1
+        ? (listed[0] ?? "")
+        : `${listed.slice(0, -1).join(", ")} and ${listed[listed.length - 1] ?? ""}`;
+
+  const when = plan.resolvedBy === null
+    ? (plan.statedTime === null ? null : `"${plan.statedTime}"`)
+    : clockOf(frame.spanStartsAt, tz);
+
+  const where = frame.title === null || frame.title === "Plans" ? null : ` to ${frame.title}`;
+
+  return `${who} going${where ?? ""}${when === null ? "" : ` at ${when}`}.`;
+}
+
 export function buildStories(db: DB, options: StoryOptions): StoryReport {
   const started = Date.now();
   const now = Date.now();
 
   const anchored = anchorNodes(db, {
+    timezone: options.timezone,
     ...(options.shouldStop === undefined ? {} : { shouldStop: options.shouldStop }),
     ...(options.onProgress === undefined ? {} : { onProgress: options.onProgress }),
   });
@@ -279,13 +328,18 @@ export function buildStories(db: DB, options: StoryOptions): StoryReport {
   const terms = new TermIndex(db);
   const self = selfEntity(db);
 
-  const detected = detectFrames(db, noise, { since: options.since });
+  const detected = detectFrames(db, noise, {
+    since: options.since,
+    timezone: options.timezone,
+  });
 
   if (detected.frames.length === 0) {
     options.onNote?.("nothing in the calendar looks like a journey or an occasion yet");
   } else {
     options.onNote?.(
-      `${String(detected.report.trips)} journeys and ${String(detected.report.occasions)} occasions`,
+      `${String(detected.report.trips)} journeys, ${String(detected.report.occasions)} occasions ` +
+        `and ${String(detected.report.plans)} plans ` +
+        `(${String(detected.report.plansResolved)} pinned to a time)`,
     );
   }
 
@@ -420,7 +474,12 @@ export function buildStories(db: DB, options: StoryOptions): StoryReport {
           // A title the person wrote is theirs, and no pass overwrites it.
           title: prior?.titleSource === "user" ? prior.title : proposal.title,
           titleSource: prior?.titleSource ?? "derived",
-          summary: null,
+          // A plan says who and when in one sentence, built from the roster
+          // and the resolved time rather than generated. `name.ts` refuses to
+          // let a model write a title because a label outruns its evidence;
+          // the same argument applies here and more sharply, because this
+          // sentence names people and asserts they are going somewhere.
+          summary: summaryOf(proposal.frame, options.timezone),
           place: proposal.frame.place,
           spanStartsAt: proposal.frame.spanStartsAt,
           spanEndsAt: proposal.frame.spanEndsAt,
@@ -487,6 +546,8 @@ export function buildStories(db: DB, options: StoryOptions): StoryReport {
     framesDetected: detected.frames.length,
     trips: detected.report.trips,
     occasions: detected.report.occasions,
+    plans: detected.report.plans,
+    plansResolved: detected.report.plansResolved,
     home: detected.report.home,
     storiesWritten: proposals.length,
     carried,
@@ -525,7 +586,10 @@ export function explainStory(
   const terms = new TermIndex(db);
   const self = selfEntity(db);
 
-  const detected = detectFrames(db, noise, { since: options.since });
+  const detected = detectFrames(db, noise, {
+    since: options.since,
+    timezone: options.timezone,
+  });
 
   const members = db
     .prepare(`SELECT node_kind, node_id FROM story_nodes WHERE story_id = ? AND role = 'spine'`)

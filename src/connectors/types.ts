@@ -73,8 +73,24 @@ export interface SyncContext {
  * One durable unit of work. The engine writes it in a transaction and only
  * then records `cursor`, so an interruption costs at most one batch.
  */
+/** One reaction, keyed to the source's own id for the message it is about. */
+export interface ReactionUpsert {
+  readonly targetExternalId: string;
+  readonly author: string | null;
+  readonly kind: "love" | "like" | "dislike" | "laugh" | "emphasize" | "question";
+  readonly occurredAt: number;
+}
+
 export interface SyncBatch {
   readonly upserts: readonly ItemUpsert[];
+  /**
+   * Marks on other messages, rather than messages.
+   *
+   * Separate from `upserts` because a reaction is not an item and giving it a
+   * row in `items` would put it in search, in the term index and in coverage
+   * counts. A source with no notion of reacting simply never sets this.
+   */
+  readonly reactions?: readonly ReactionUpsert[] | undefined;
   /** External ids the source says are gone. Tombstoned, never deleted. */
   readonly deletes?: readonly string[] | undefined;
   /** Opaque resume point. Null means "no further resume point exists". */

@@ -30,7 +30,8 @@ import {
   setThreadState,
 } from "../store/relationships.js";
 import { explain, relate } from "../derive/relate.js";
-import { buildStories, explainStory } from "../derive/stories.js";
+import { anchorNodes, buildStories, explainStory } from "../derive/stories.js";
+import { refinePlans } from "../derive/refine-plans.js";
 import { nameStories } from "../derive/name-stories.js";
 import { nameHandles } from "../store/entities.js";
 import { presenceAt, presenceTimeline, describePresence, describePlace } from "../derive/presence.js";
@@ -2510,13 +2511,18 @@ async function main(): Promise<number> {
 
   dev
     .command("stories")
-    .description("Read anchors, find journeys and occasions, and assemble stories")
+    .description("Read anchors, find journeys, occasions and plans, and assemble stories")
     .option("--rebuild", "throw away every anchor and story and derive them again")
+    // On by default in the job that runs this for real; off here, because
+    // `dev stories` is the command somebody reaches for while changing the
+    // deterministic layer, and a model call in the middle of that loop is slow
+    // and hides which half produced the change.
+    .option("--refine", "also read plan conversations with a model")
     // Five years, because that is the span of a life a person is still
     // answering questions about, and because a store carries stray timestamps
     // from twenty years ago that are not events at all.
     .option("--since <days>", "only occasions in the last N days", "1825")
-    .action((options: { since?: string; rebuild?: boolean }) => {
+    .action(async (options: { since?: string; rebuild?: boolean; refine?: boolean }) => {
       const { db } = openDatabase();
 
       try {
@@ -2536,6 +2542,28 @@ async function main(): Promise<number> {
 
         const days = options.since === undefined ? null : Number.parseInt(options.since, 10);
 
+        if (options.refine === true) {
+          anchorNodes(db, { timezone: timezone() });
+
+          const refined = await refinePlans(db, {
+            principalId: DEFAULT_PRINCIPAL,
+            timezone: timezone(),
+            onNote: (message: string) => {
+              logger.print(`  ${message}`);
+            },
+          });
+
+          logger.print(
+            `  ${String(refined.read)} conversations read, ` +
+              `${String(refined.improved)} rosters changed, ` +
+              `${String(refined.failed)} could not be read`,
+          );
+
+          for (const note of refined.rejected) {
+            logger.print(`  dropped: ${note}`);
+          }
+        }
+
         const report = buildStories(db, {
           principalId: DEFAULT_PRINCIPAL,
           timezone: timezone(),
@@ -2550,6 +2578,7 @@ async function main(): Promise<number> {
         logger.print("");
         logger.print(
           `${String(report.trips)} journeys, ${String(report.occasions)} occasions, ` +
+            `${String(report.plans)} plans (${String(report.plansResolved)} pinned to a time), ` +
             `${String(report.storiesWritten)} stories`,
         );
         logger.print(

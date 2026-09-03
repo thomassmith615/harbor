@@ -15,12 +15,13 @@
 import { CursorExpiredError } from "./types.js";
 import { recordSelfHandles } from "../store/entities.js";
 import { saveAttachment } from "../store/attachments.js";
+import { saveReaction } from "../store/reactions.js";
 import { tombstoneExternal, upsertItem } from "../store/items.js";
 import { checkpoint, finishRun, resumableRun, startRun } from "../store/syncruns.js";
 import { ensureStream, markPhase, recordStreamSync } from "../store/streams.js";
 import type { DB } from "../kernel/db.js";
 import type { ItemUpsert } from "../store/items.js";
-import type { SourceConnector, SyncBatch, SyncContext } from "./types.js";
+import type { ReactionUpsert, SourceConnector, SyncBatch, SyncContext } from "./types.js";
 
 export type SyncMode = "recent" | "historical" | "backfill" | "incremental" | "auto";
 export type ResolvedMode = "recent" | "historical" | "backfill" | "incremental";
@@ -177,6 +178,7 @@ function writeBatch(
   db: DB,
   accountId: string,
   batch: SyncBatch,
+  streamId: string,
 ): {
   changed: number;
   unchanged: number;
@@ -190,7 +192,11 @@ function writeBatch(
 
   // One transaction per batch. The checkpoint below is only recorded after the
   // data it describes is durable, so an interruption costs at most one batch.
-  const write = db.transaction((upserts: readonly ItemUpsert[], deletes: readonly string[]) => {
+  const write = db.transaction((
+    upserts: readonly ItemUpsert[],
+    deletes: readonly string[],
+    reactions: readonly ReactionUpsert[],
+  ) => {
     for (const upsert of upserts) {
       const outcome = upsertItem(db, upsert);
 
@@ -209,12 +215,22 @@ function writeBatch(
       }
     }
 
+    for (const reaction of reactions) {
+      saveReaction(db, {
+        streamId,
+        targetGuid: reaction.targetExternalId,
+        author: reaction.author,
+        kind: reaction.kind,
+        occurredAt: reaction.occurredAt,
+      });
+    }
+
     if (deletes.length > 0) {
       tombstoned = tombstoneExternal(db, accountId, deletes, Date.now());
     }
   });
 
-  write(batch.upserts, batch.deletes ?? []);
+  write(batch.upserts, batch.deletes ?? [], batch.reactions ?? []);
   return { changed, unchanged, tombstoned, pendingAttachments };
 }
 
@@ -252,7 +268,7 @@ async function runBackfill(
     // rather than marked failed: the checkpoint is sound and the next attempt
     // picks up from it.
     for await (const batch of connector.backfill(context, run.pageCursor)) {
-      const outcome = writeBatch(db, context.accountId, batch);
+      const outcome = writeBatch(db, context.accountId, batch, context.streamId);
       await storeAttachments(db, outcome.pendingAttachments);
 
       changed += outcome.changed;
@@ -328,7 +344,7 @@ async function runIncremental(
   let latest = cursor;
 
   for await (const batch of connector.incremental(context, cursor)) {
-    const outcome = writeBatch(db, context.accountId, batch);
+    const outcome = writeBatch(db, context.accountId, batch, context.streamId);
     await storeAttachments(db, outcome.pendingAttachments);
 
     changed += outcome.changed;

@@ -360,6 +360,81 @@ a flight back. Half its assertions are memberships it *forbids* — a newsletter
 recurring standup, and a stranger who mentions the destination during the trip
 week.
 
+## Plans
+
+A trip arrives pre-specified: an airline writes the calendar entry, the entry
+names a route and carries a flight number, and every anchor kind in
+`anchors.ts` is a fully specified claim of exactly that sort. That is why the
+story layer was good at trips and could not see an evening.
+
+An evening arrives as "who's going to the bar later", "im in", "8ish?", and a
+one word reminder. No place the gazetteer holds. No date `dates.ts` reads. No
+identifier anybody quotes. Two of those words are three letters long and cannot
+clear the term floor, and "bar" and "pub" are not the same word in any case.
+Nothing there is a value the store could hold, and no amount of tuning a
+similarity score reaches a word that cannot be represented.
+
+**A time is an interval.** `timing.ts` reads "later", "tonight", "after work"
+and "8ish" as windows with a width, and the width is the point: "later" said at
+a quarter to six is five hours wide, and 8:00 PM on a confirmation is thirty
+minutes. Both are true statements about when something happens.
+
+**Membership stops asking whether things resemble each other.** A plan holds a
+question open. A confirmation stating 8:00 PM answers it while sharing no word,
+no place, no person and no identifier with the conversation that asked. The
+evidence line is a sentence about the world rather than about an index: *you
+said "8ish", and this says 8:00 PM.*
+
+The asymmetry is the quality control. A narrow interval inside a wide one is an
+answer; two wide intervals overlapping is a coincidence, and every plan on a
+Thursday evening overlaps every other plan on that Thursday evening. Resolution
+also needs a second, non-temporal reason: a booking, a calendar entry, a shared
+venue, or somebody who is going. Time says which candidate; that says whether.
+
+**A roster is not a participant list.** `going` is its own anchor kind, and the
+distinction is the product. Everybody in a group chat is a `person` on that
+episode, including whoever declined; only the ones who agreed are `going`. That
+is also what closes the precision hole underneath the occasion rules, where
+position alone admitted any conversation within fourteen hours: a chat about a
+rendering bug used to join a night at a pub at the same score as the chat that
+arranged it, with "was said three hours before it starts" written underneath.
+
+**A plan nobody agreed to, or nobody timed, is not a plan.** "we should grab
+dinner sometime" is a pleasantry until somebody answers it, and an evening with
+no hour is one Harbor can say nothing useful about. Both are dropped rather than
+shown, and an unresolved plan expires once its window is well past: a claim that
+something is about to happen has to stop being made.
+
+Two bugs went with it, both found by running the scenario rather than reading
+the code. `withinSpan` allows an hour of slack either side, so a reminder at
+7:40 for an eight o'clock table read as happening *during* the evening, took the
+weak branch worth 0.40 and died against a bar of 0.60 without the preparation
+branch ever running. And a reservation confirmation is mass mail by every
+structural test there is, so the single most informative node in the evening was
+thrown out with the circulars; resolving a plan's time is now a third exit
+alongside a shared identifier and a booking that names a place.
+
+**Liking the message is answering it.** A tapback was filtered at the connector
+on the grounds that it is not a message, which is true and was the wrong
+conclusion: on a real group chat a good share of the roster never types a word.
+Filtering it at ingest meant that answer was not merely unread but
+unrecoverable, because no pass downstream can find what was never written.
+Reactions now have their own table, are rendered into the transcript beside the
+message they annotate, and count as agreement when they land on the proposal
+itself. Liking a message about a phone charger puts nobody anywhere.
+
+The model is where a roster gets better rather than where it comes from.
+`refinePlan` reads the same transcript under the fencing `purchase.ts` uses on a
+total: a deterministic predicate decides which transcripts are worth reading, the
+output parses against a schema, and every stance quotes the line it came from
+with the quote checked against the transcript. The rules find "im in" and
+"same"; they do not find "she can come", and no pattern reaches that without
+also reaching every acknowledgement anybody sends. A thin roster is a thin
+answer. A wrong name on one is a false statement about somebody's evening.
+
+`src/fixtures/bar-night.ts` is the scenario written down, and half its
+assertions are memberships it forbids.
+
 ## The graph
 
 An edge joins two **nodes**, and a node is an item or an episode. That
@@ -482,9 +557,21 @@ that says only "haha ok" must connect to nothing.
 
 ## Known gaps
 
-- The story layer knows two frame kinds, trip and occasion. Orders and
-  deliveries are an obvious third and are not built; purchases already have
+- The story layer knows three frame kinds: trip, occasion and plan. Orders and
+  deliveries are an obvious fourth and are not built; purchases already have
   their own projection.
+- A plan needs somebody to state an hour somewhere. An evening arranged entirely
+  as "later" with no reservation, no calendar entry and no follow-up stays
+  invisible, which is the honest reading of a conversation that never settled
+  one, and it is still a gap.
+- The deterministic stance reader finds explicit agreement and misses implicit
+  agreement. `refinePlan` closes it and needs a model server; without one the
+  roster is whoever said so plainly.
+- A tapback counts only on the message that proposed something. Liking the
+  reply that settled the time is agreement by any reading and is not read as
+  any.
+- Reactions are read from iMessage and from nowhere else, because no other
+  connected source has them.
 - A journey needs a calendar entry, or mail that states a date. An airline
   confirmation with no date in it and no matching calendar entry produces no
   trip, because a leg without a departure time is not a leg.

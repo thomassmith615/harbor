@@ -28,6 +28,8 @@
 import { anchorsByKind, valuesOf } from "./anchors.js";
 import { mentionsTravel, placeById, placesIn, routesIn } from "./places.js";
 import { anchorsFor } from "../store/anchors.js";
+import { timezone } from "../kernel/time.js";
+import { planFrames } from "./plan-frames.js";
 import { NodeResolver, nodeKey } from "../store/nodes.js";
 import type { DB } from "../kernel/db.js";
 import type { GraphNode, NodeRef } from "../store/nodes.js";
@@ -45,7 +47,30 @@ const HOUR = 3_600_000;
  */
 export const STORY_VERSION = 1;
 
-export type FrameKind = "trip" | "occasion";
+export type FrameKind = "trip" | "occasion" | "plan";
+
+/**
+ * What a plan frame knows that no other frame kind does.
+ *
+ * Kept as its own object rather than widened into `Frame` because every field
+ * here is meaningless for a journey, and three optional properties on the type
+ * every frame shares is how a type stops describing anything.
+ */
+export interface PlanDetail {
+  /** The conversation it was arranged in. */
+  readonly episodeId: string;
+  /** The words that proposed it. */
+  readonly proposal: string;
+  /** Everyone who said yes, the user included, by entity id where known. */
+  readonly going: readonly { readonly id: string; readonly name: string }[];
+  /** What the plan itself said about when, before anything resolved it. */
+  readonly openedAt: number;
+  readonly statedTime: string | null;
+  /** Set once something narrower answered the question the plan left open. */
+  readonly resolvedBy: NodeRef | null;
+  readonly resolvedDisplay: string | null;
+  readonly venuePhrases: readonly string[];
+}
 
 export interface Frame {
   /**
@@ -70,6 +95,8 @@ export interface Frame {
   readonly anchors: readonly Anchor[];
   /** True when a journey out was found with no journey back. */
   readonly openEnded: boolean;
+  /** Present only on a plan, or on an occasion that absorbed one. */
+  readonly plan?: PlanDetail | undefined;
 }
 
 interface Journey {
@@ -781,6 +808,10 @@ function occasionFrames(
 export interface FrameReport {
   readonly trips: number;
   readonly occasions: number;
+  /** Plans read out of conversation. Zero of these existed before v0.52. */
+  readonly plans: number;
+  /** Of those, how many something in the store pinned to an hour. */
+  readonly plansResolved: number;
   readonly home: string | null;
 }
 
@@ -799,10 +830,16 @@ export interface DetectedFrames {
 export function detectFrames(
   db: DB,
   noise: NoiseIndex,
-  options: { readonly since?: number | undefined } = {},
+  options: {
+    readonly since?: number | undefined;
+    /** Needed to read a time of day. Defaults to the machine's own. */
+    readonly timezone?: string | undefined;
+    readonly now?: number | undefined;
+  } = {},
 ): DetectedFrames {
   const resolver = new NodeResolver(db);
   const since = options.since ?? 0;
+  const tz = options.timezone ?? timezone();
 
   const trips = tripFrames(db, resolver, noise, since);
 
@@ -824,11 +861,53 @@ export function detectFrames(
   ));
   const journeys = journeysIn(db, resolver, noise, since);
 
+  // Plans last, and folded into the calendar rather than competing with it.
+  //
+  // Precedence here is the same rule as everywhere else in this file: the
+  // frame kind that explains more of the record claims what it explains. A
+  // calendar entry for the same evening is a better spine than a conversation,
+  // because somebody wrote it down deliberately -- so where both exist, the
+  // occasion survives and takes the plan's roster with it. Two cards for one
+  // Thursday night is the wedding failure again, and it was four cards then.
+  const plans = planFrames(db, noise, {
+    ...(options.since === undefined ? {} : { since: options.since }),
+    ...(options.now === undefined ? {} : { now: options.now }),
+    timezone: tz,
+  });
+
+  const standalone: Frame[] = [];
+  const absorbed = new Map<string, Frame>();
+
+  for (const plan of plans) {
+    const host = occasions.find(
+      (occasion) =>
+        plan.spanStartsAt <= occasion.spanEndsAt && plan.spanEndsAt >= occasion.spanStartsAt,
+    );
+
+    if (host === undefined) {
+      standalone.push(plan);
+      continue;
+    }
+
+    const held = absorbed.get(host.key) ?? host;
+
+    absorbed.set(host.key, {
+      ...held,
+      spine: [...held.spine, ...plan.spine.filter((ref) => ref.kind === "episode")],
+      anchors: mergeAnchors([held.anchors, plan.anchors]),
+      plan: plan.plan,
+    });
+  }
+
+  const merged = occasions.map((occasion) => absorbed.get(occasion.key) ?? occasion);
+
   return {
-    frames: [...trips, ...occasions],
+    frames: [...trips, ...merged, ...standalone],
     report: {
       trips: trips.length,
-      occasions: occasions.length,
+      occasions: merged.length,
+      plans: plans.length,
+      plansResolved: plans.filter((frame) => frame.plan?.resolvedBy != null).length,
       home: homePlace(journeys),
     },
   };

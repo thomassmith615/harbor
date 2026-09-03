@@ -15,7 +15,8 @@ import { createEmbedder } from "../derive/embed/index.js";
 import { derive, reindex } from "../derive/pipeline.js";
 import { resolveEntities } from "../derive/entities.js";
 import { relate } from "../derive/relate.js";
-import { buildStories } from "../derive/stories.js";
+import { anchorNodes, buildStories } from "../derive/stories.js";
+import { refinePlans } from "../derive/refine-plans.js";
 import { nameStories } from "../derive/name-stories.js";
 import { buildCommitments } from "../derive/commitments.js";
 import { extractPurchases } from "../derive/extract.js";
@@ -637,6 +638,42 @@ async function run(db: DB, jobId: string, task: JobTask, context: JobContext): P
   }
 
   if (task === "stories") {
+    // Anchor, then read the plans in a model, then assemble.
+    //
+    // The order is load bearing and it is the reason anchoring is called here
+    // rather than left to `buildStories`, which would also do it. Refinement
+    // improves anchors that have to exist first, and frames are detected from
+    // anchors that have to be final. Slot it after and the plans are built
+    // from the rules' reading while a better one sits on disk unread, which is
+    // the quiet kind of wrong: everything runs, nothing improves.
+    //
+    // `buildStories` anchors again immediately afterwards and that pass is a
+    // no-op, because anchoring is versioned per node.
+    anchorNodes(db, {
+      timezone: context.timezone,
+      shouldStop: () => stopped(db, jobId),
+      onProgress: (done, total) => {
+        report(db, jobId, { done, total });
+      },
+    });
+
+    const refined = await refinePlans(db, {
+      principalId: context.principalId,
+      timezone: context.timezone,
+      shouldStop: () => stopped(db, jobId),
+      onNote: (message) => {
+        report(db, jobId, { note: message });
+      },
+    });
+
+    if (refined.read > 0) {
+      report(db, jobId, {
+        note:
+          `${String(refined.read)} conversations read for what was arranged, ` +
+          `${String(refined.improved)} rosters changed`,
+      });
+    }
+
     const outcome = buildStories(db, {
       principalId: context.principalId,
       timezone: context.timezone,
@@ -654,8 +691,9 @@ async function run(db: DB, jobId: string, task: JobTask, context: JobContext): P
     });
 
     return (
-      `${String(outcome.storiesWritten)} stories from ${String(outcome.trips)} journeys ` +
-      `and ${String(outcome.occasions)} occasions, ${String(outcome.crossSource)} cross-source`
+      `${String(outcome.storiesWritten)} stories from ${String(outcome.trips)} journeys, ` +
+      `${String(outcome.occasions)} occasions and ${String(outcome.plans)} plans, ` +
+      `${String(outcome.crossSource)} cross-source`
     );
   }
 

@@ -37,6 +37,7 @@ import type { NoiseIndex } from "./noise.js";
 
 const DAY = 86_400_000;
 const HOUR = 3_600_000;
+const MINUTE = 60_000;
 
 /**
  * How far back a trip reaches for its own planning.
@@ -101,6 +102,14 @@ const PREPARATION_SHAPED =
 
 /** And how close it has to be for that shape to be enough. */
 const PREP_POSITIONAL_MS = 26 * HOUR;
+
+/**
+ * How near a resolved start a reminder may be set and be about it.
+ *
+ * Ninety minutes. Long enough for "leave now" and "grab cash", short enough
+ * that the morning's unrelated errands are somebody else's problem.
+ */
+const PLAN_PREP_MS = 90 * MINUTE;
 
 /**
  * How long before something a conversation counts as arranging it.
@@ -201,12 +210,31 @@ export interface GatherContext {
   readonly explain?: boolean;
 }
 
+/**
+ * How long an evening is planned over.
+ *
+ * Hours, not weeks. A trip reaches back four months because a trip is arranged
+ * over four months; an evening at a bar is arranged the same afternoon, and
+ * reaching further would mean everything said to those people all week is
+ * candidate evidence for tonight.
+ */
+const PLAN_LEAD_MS = 30 * HOUR;
+const PLAN_TAIL_MS = 12 * HOUR;
+
 function leadFor(frame: Frame): number {
-  return frame.kind === "trip" ? TRIP_LEAD_MS : OCCASION_LEAD_MS;
+  if (frame.kind === "trip") {
+    return TRIP_LEAD_MS;
+  }
+
+  return frame.kind === "plan" ? PLAN_LEAD_MS : OCCASION_LEAD_MS;
 }
 
 function tailFor(frame: Frame): number {
-  return frame.kind === "trip" ? TRIP_TAIL_MS : OCCASION_TAIL_MS;
+  if (frame.kind === "trip") {
+    return TRIP_TAIL_MS;
+  }
+
+  return frame.kind === "plan" ? PLAN_TAIL_MS : OCCASION_TAIL_MS;
 }
 
 /**
@@ -363,7 +391,17 @@ function score(
     }
   }
 
-  const inSpan = withinSpan(node.occurredAt, frame.spanStartsAt, frame.spanEndsAt, HOUR);
+  // Before the thing is before the thing, whatever the slack says.
+  //
+  // `withinSpan` allows an hour either side, which is right for a trip whose
+  // boundaries are approximate and catastrophic for a short occasion: a
+  // reminder at 7:40 for an eight o'clock table read as happening *during* the
+  // evening, took the weak "happens during it" branch worth 0.40, and died
+  // against an admission bar of 0.60. The preparation branch, which exists for
+  // exactly that reminder, was never reached. Anything earlier than the start
+  // is preparation and is judged as preparation.
+  const beforeStart = node.occurredAt < frame.spanStartsAt;
+  const inSpan = !beforeStart && withinSpan(node.occurredAt, frame.spanStartsAt, frame.spanEndsAt, HOUR);
 
   let placeMatched = false;
 
@@ -503,12 +541,34 @@ function score(
         ? beforeBy <= PREP_POSITIONAL_MS && PREPARATION_SHAPED.test(node.text)
         : beforeBy <= CHATTER_PREP_MS;
 
+      // A reminder set for the hour before a known start.
+      //
+      // The general rule that position is never sufficient for a reminder is
+      // right, and the reason it is right is that something is always about to
+      // happen, so a three day window admits every note anybody writes. That
+      // argument does not survive contact with a *resolved* time. Somebody who
+      // sets a reminder for twenty minutes before a table they booked has told
+      // you what it is for by choosing that minute, and "wallet" is not a word
+      // any content rule will ever match to a pub.
+      //
+      // Narrow deliberately: a known start, a real task, and inside the window
+      // where nothing else plausibly explains the timing.
+      if (heavy && node.kind === "task" && frame.plan?.resolvedBy != null) {
+        if (beforeBy <= PLAN_PREP_MS) {
+          positional = true;
+        }
+      }
+
+      const forPlan = heavy && node.kind === "task" && frame.plan?.resolvedBy != null;
+
       add(
         "prep",
         heavy ? 0.5 : 0.45,
-        positional && heavy
-          ? `${describeGap(beforeBy)} beforehand, and reads like getting ready for it`
-          : `${describeGap(beforeBy)} before it starts`,
+        forPlan && positional
+          ? `set for ${describeGap(beforeBy)} before it starts`
+          : positional && heavy
+            ? `${describeGap(beforeBy)} beforehand, and reads like getting ready for it`
+            : `${describeGap(beforeBy)} before it starts`,
       );
     }
 
@@ -538,6 +598,43 @@ function score(
       frame.kind === "trip" ? 0.45 : 0.25,
       `is with ${people.slice(0, 3).join(", ")}`,
     );
+  }
+
+  // Being one of the people who said yes.
+  //
+  // A different claim from `person`, and the difference is the product. Every
+  // node in a group chat carries a person anchor for everybody in the thread,
+  // including the ones who never answered and the one who said they could not
+  // come. `going` is only the ones who agreed, so a message from somebody on
+  // the roster is evidence about the evening and a message from somebody who
+  // declined is not.
+  if (frame.plan !== undefined) {
+    const roster = new Set(frame.plan.going.map((person) => person.id));
+    const onIt: string[] = [];
+
+    for (const anchor of anchors) {
+      if (anchor.kind === "person" && roster.has(anchor.value) && anchor.value !== context.selfEntityId) {
+        onIt.push(anchor.display);
+      }
+    }
+
+    if (onIt.length > 0) {
+      add("going", 0.4, `is with ${onIt.slice(0, 3).join(", ")}, who ${onIt.length === 1 ? "is" : "are"} going`);
+    }
+
+    // The node that answered the plan's open question. Decisive, and the only
+    // thing in this file that is decisive without an identifier: a narrow time
+    // falling inside a wide one, on the evening in question, from something
+    // that is a booking or a calendar entry, is not a coincidence.
+    if (frame.plan.resolvedBy !== null && nodeKey(frame.plan.resolvedBy) === nodeKey(ref)) {
+      add(
+        "resolves",
+        1,
+        frame.plan.statedTime === null
+          ? `this says ${frame.plan.resolvedDisplay ?? "when"}`
+          : `you said "${frame.plan.statedTime}", and this says ${frame.plan.resolvedDisplay ?? "when"}`,
+      );
+    }
   }
 
   const topicWords: string[] = [];
@@ -570,6 +667,15 @@ function score(
 }
 
 function describeGap(ms: number): string {
+  const minutes = Math.round(Math.abs(ms) / MINUTE);
+
+  // Rounding twenty minutes up to "1 hours" is how a reminder set for exactly
+  // the moment somebody leaves the house reads like a vague coincidence. The
+  // precision is the evidence here.
+  if (minutes < 90) {
+    return `${String(Math.max(1, minutes))} minutes`;
+  }
+
   const hours = Math.round(Math.abs(ms) / HOUR);
 
   if (hours < 36) {
@@ -614,7 +720,21 @@ function admits(
   // place, and never on subject matter. That is the narrowest rule that keeps
   // confirmations and drops circulars, and it costs a marketing email that
   // genuinely was about your weekend, which is a trade worth making.
-  if (broadcast && !scored.kinds.has("ref") && !scored.kinds.has("booking")) {
+  // A confirmation is mass mail by every structural test there is.
+  //
+  // It comes from an address nobody replies to, its subject is a template, and
+  // under the original rule it could only ever join on a shared identifier or
+  // on naming a place the gazetteer knows. That cost the single most
+  // informative node in an evening: the reservation stating the venue, the
+  // hour and the party size was thrown out with the circulars, having scored
+  // 0.90 against a bar of 0.60. Resolving the plan's time is the third exit,
+  // and it is a stronger claim than either of the other two.
+  if (
+    broadcast &&
+    !scored.kinds.has("ref") &&
+    !scored.kinds.has("booking") &&
+    !scored.kinds.has("resolves")
+  ) {
     return {
       ok: false,
       reason: "is mass mail, and nothing in it ties to this beyond the subject",
@@ -623,6 +743,31 @@ function admits(
 
   if (scored.score >= DECISIVE_SCORE && scored.kinds.has("ref")) {
     return { ok: true };
+  }
+
+  if (scored.kinds.has("resolves")) {
+    return { ok: true };
+  }
+
+  // A conversation joins a plan by having somebody who is going in it.
+  //
+  // This is where the precision hole in the occasion rules gets closed. On a
+  // real store, position alone admits any conversation inside fourteen hours
+  // of an occasion, which on a Thursday evening is most of them: a fixture
+  // caught a chat about a rendering bug joining a night at a pub at exactly
+  // the same score as the chat that arranged it, with the sentence "was said
+  // three hours before it starts" underneath. Both true, one absurd.
+  //
+  // With a roster there is finally something to ask. Proximity says a
+  // conversation *could* be about tonight; a person who is actually going says
+  // it plausibly is.
+  if (frame.kind === "plan" && scored.ref.kind === "episode") {
+    if (!scored.kinds.has("going") && !scored.kinds.has("venue") && !scored.kinds.has("resolves")) {
+      return {
+        ok: false,
+        reason: "happened nearby, but nobody in it is going and it says nothing about this",
+      };
+    }
   }
 
   // Position. Getting ready for something, or being on the calendar during it.
@@ -940,7 +1085,24 @@ export function gather(
     ref,
     role: "spine" as const,
     score: 1,
-    contributions: [{ kind: "spine", points: 1, evidence: "this is the thing itself" }],
+    contributions: [
+      {
+        kind: "spine",
+        points: 1,
+        // A plan has two spine nodes and they are the thing itself in
+        // different ways. The conversation is the plan. The confirmation is
+        // what turned it from an evening into eight o'clock, and saying "this
+        // is the thing itself" underneath it throws away the only sentence
+        // here that explains how two nodes sharing no word ended up together.
+        evidence:
+          frame.plan !== undefined && frame.plan.resolvedBy !== null &&
+          nodeKey(frame.plan.resolvedBy) === nodeKey(ref)
+            ? frame.plan.statedTime === null
+              ? `this says ${frame.plan.resolvedDisplay ?? "when"}`
+              : `you said "${frame.plan.statedTime}", and this says ${frame.plan.resolvedDisplay ?? "when"}`
+            : "this is the thing itself",
+      },
+    ],
   }));
 
   // Best evidence first when trimming to the ceiling, then back into time

@@ -27,6 +27,8 @@
  * about a search index.
  */
 import { datesIn } from "./dates.js";
+import { anchorsOfPlan, readPlans, venuesIn, normalizeVenue } from "./plans.js";
+import { timeHintsIn } from "./timing.js";
 import { localityIn, mentionsTravel, placesIn, routesIn } from "./places.js";
 import { entitiesOfNode } from "../store/nodes.js";
 import type { DB } from "../kernel/db.js";
@@ -48,10 +50,30 @@ import type { NameIndex } from "./mentions.js";
  * anchors already on disk are wrong rather than merely older -- and the failure
  * mode of forgetting to bump this is the quiet one, where a rebuild appears to
  * run and nothing improves because nothing was re-read.
+ *
+ * 3: times of day, venues, plans and rosters. Every node in the store gains a
+ * time_hint where it states an hour, which is a claim nothing could previously
+ * make: dates.ts reads days and returns midnight, so a confirmation saying
+ * 8:00 PM contributed the date and discarded the only part of it anybody cares
+ * about on the evening in question.
  */
-export const ANCHOR_VERSION = 2;
+export const ANCHOR_VERSION = 3;
 
-export type AnchorKind = "place" | "date" | "ref" | "person" | "topic" | "route";
+export type AnchorKind =
+  | "place"
+  | "date"
+  | "ref"
+  | "person"
+  | "topic"
+  | "route"
+  /** A plan somebody proposed and others agreed to. Only ever on an episode. */
+  | "plan"
+  /** Somebody who said yes to a plan, as opposed to somebody who was present. */
+  | "going"
+  /** A time of day, as an interval. See timing.ts for why it is not a date. */
+  | "time_hint"
+  /** A place the gazetteer will never hold: a bar, a restaurant, a friend's house. */
+  | "venue";
 
 export interface Anchor {
   readonly kind: AnchorKind;
@@ -211,6 +233,14 @@ function looksLikeWord(term: string): boolean {
 export interface AnchorContext {
   readonly terms: TermIndex;
   /**
+   * The user's timezone, because a time of day is meaningless without one.
+   *
+   * Optional so that callers testing extraction in isolation need not supply
+   * it; every real pass does, and the fallback is UTC, which is wrong by
+   * exactly the offset and would put an evening plan on the wrong day.
+   */
+  readonly timezone?: string | undefined;
+  /**
    * People this store knows, so a name in a sentence can reach the person.
    *
    * Optional only so that callers testing extraction in isolation need not
@@ -343,6 +373,70 @@ export function anchorsOf(db: DB, node: GraphNode, context: AnchorContext): read
       endsAt: null,
       confidence: mention.confidence,
     });
+  }
+
+  // Times of day, on every node.
+  //
+  // Not confined to conversations, and that is the point: the reason a plan
+  // can be resolved at all is that a restaurant's confirmation states an hour,
+  // and until now the only thing read out of it was the day.
+  for (const hint of timeHintsIn(text, node.occurredAt, context.timezone ?? "UTC")) {
+    put({
+      kind: "time_hint",
+      value: hint.value,
+      display: hint.display,
+      startsAt: hint.startsAt,
+      endsAt: hint.endsAt,
+      confidence: hint.confidence,
+    });
+  }
+
+  // Places the gazetteer cannot hold.
+  //
+  // `places.ts` is eighty-eight US cities, hand-checked, and it is the right
+  // shape for a trip: a journey goes to a city. An evening goes to a bar with
+  // a proper name that no gazetteer will ever contain, and the correct failure
+  // for that has been to treat it as an ordinary topic word, which capped what
+  // it could be worth at a hint.
+  for (const phrase of venuesIn(text)) {
+    put({
+      kind: "venue",
+      value: normalizeVenue(phrase),
+      display: phrase,
+      startsAt: null,
+      endsAt: null,
+      confidence: 0.6,
+    });
+  }
+
+  // And, on a conversation only, what was arranged in it.
+  if (node.ref.kind === "episode") {
+    // A name on a roster has to reach the person, or the roster is a list of
+    // strings and every downstream question about who is going has to do
+    // string matching against display names. `entities` is the only thing that
+    // knows "Dave" and "Dave Mullen" are one person.
+    const byName = db.prepare(
+      `SELECT id FROM entities WHERE LOWER(display_name) = LOWER(?) LIMIT 1`,
+    );
+
+    for (const plan of readPlans(text, node.occurredAt, context.timezone ?? "UTC", node.ref.id)) {
+      for (const anchor of anchorsOfPlan(plan)) {
+        if (anchor.kind !== "going" || !anchor.value.startsWith("name:")) {
+          put(anchor);
+          continue;
+        }
+
+        // "Me" is the user, and the user is on their own roster. Saying an
+        // evening is with three people when it is with three people and you is
+        // a small wrongness that reads as a large one.
+        const resolved =
+          anchor.display.toLowerCase() === "me"
+            ? self
+            : (byName.get(anchor.display) as { id: string } | undefined)?.id;
+
+        put({ ...anchor, value: resolved ?? anchor.value });
+      }
+    }
   }
 
   let topics = 0;

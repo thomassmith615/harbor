@@ -68,12 +68,19 @@ describe("migrations against a database that already has data", () => {
         0,
       );
 
-      const latest = MIGRATIONS[MIGRATIONS.length - 1];
+      // The migration that rebuilds `stories`, found by what it does rather
+      // than by where it sits. It was the last one in the list when this test
+      // was written, and taking the last one meant that adding any migration
+      // after it silently moved this test onto the new one: the day `reactions`
+      // was added, this stopped exercising the rebuild and started failing on
+      // a `CREATE TABLE` instead. What is being tested is the rebuild, so that
+      // is what is selected.
+      const latest = MIGRATIONS.find((migration) => migration.includes("stories_new"));
 
-      assert.ok(latest !== undefined);
+      assert.ok(latest !== undefined, "no migration rebuilds stories any more");
 
-      // Re-running the newest migration against populated tables is the same
-      // situation an existing store is in when it upgrades.
+      // Re-running it against populated tables is the same situation an
+      // existing store is in when it upgrades.
       store.db.exec("BEGIN");
       store.db.exec(latest);
       store.db.exec("COMMIT");

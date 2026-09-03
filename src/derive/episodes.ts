@@ -25,10 +25,11 @@ import {
   saveEpisode,
 } from "../store/episodes.js";
 import { DEFAULT_PRINCIPAL } from "../store/schema.js";
+import { reactionsFor, type Reaction } from "../store/reactions.js";
 import type { DB } from "../kernel/db.js";
 
 /** Bump to re-segment. Episodes whose membership is unchanged keep their vectors. */
-export const SEGMENT_VERSION = 1;
+export const SEGMENT_VERSION = 2;
 
 /**
  * Silence that ends an episode.
@@ -83,6 +84,8 @@ export const CONVERSATIONAL_CONNECTORS: readonly string[] = ["imessage"];
 
 interface MessageRow {
   readonly id: string;
+  /** The source's own id, which is what a reaction points at. */
+  readonly external_id: string;
   readonly stream_id: string;
   readonly thread_id: string | null;
   readonly title: string | null;
@@ -153,7 +156,43 @@ function speakerOf(row: MessageRow): string {
   return name.length === 0 ? "Them" : name;
 }
 
-function transcriptFor(rows: readonly MessageRow[]): string {
+/**
+ * How a reaction reads in a transcript.
+ *
+ * On its own line, attributed, and quoting what it was a reaction to. Two
+ * readers depend on this format and neither should have to know it is a
+ * different sort of record: the stance rules in `plans.ts` match on the line,
+ * and a model reading the same transcript sees a person answering a question
+ * the way people actually answer it.
+ *
+ * Only the positive ones are rendered. A laugh is not agreement, a question
+ * mark is closer to the opposite, and rendering them would put an ambiguous
+ * line in front of both readers where there is nothing useful to be said.
+ */
+const AGREEABLE = new Set(["love", "like"]);
+
+function reactionLines(
+  reactions: readonly Reaction[],
+  target: string,
+  speakerFor: (author: string | null) => string,
+): readonly string[] {
+  const lines: string[] = [];
+
+  for (const reaction of reactions) {
+    if (!AGREEABLE.has(reaction.kind)) {
+      continue;
+    }
+
+    lines.push(`${speakerFor(reaction.author)}: [${reaction.kind}d "${target.slice(0, 60)}"]`);
+  }
+
+  return lines;
+}
+
+function transcriptFor(
+  rows: readonly MessageRow[],
+  reactions: ReadonlyMap<string, readonly Reaction[]>,
+): string {
   const lines: string[] = [];
   let used = 0;
 
@@ -176,6 +215,19 @@ function transcriptFor(rows: readonly MessageRow[]): string {
 
     lines.push(line);
     used += line.length + 1;
+
+    for (const extra of reactionLines(
+      reactions.get(row.external_id) ?? [],
+      text,
+      (author) => (author === null ? "Me" : author),
+    )) {
+      if (used + extra.length > MAX_TRANSCRIPT_CHARS) {
+        break;
+      }
+
+      lines.push(extra);
+      used += extra.length + 1;
+    }
   }
 
   return lines.join("\n");
@@ -197,7 +249,7 @@ function segmentThread(
 ): { episodes: number; messages: number; itemIds: string[]; pruned: number } {
   const rows = db
     .prepare(
-      `SELECT id, stream_id, thread_id, title, SUBSTR(body, 1, 1000) AS body, snippet,
+      `SELECT id, external_id, stream_id, thread_id, title, SUBSTR(body, 1, 1000) AS body, snippet,
               author, direction, occurred_at
        FROM items
        WHERE stream_id = @stream AND thread_id = @thread AND deleted_at IS NULL
@@ -208,6 +260,13 @@ function segmentThread(
   if (rows.length === 0) {
     return { episodes: 0, messages: 0, itemIds: [], pruned: 0 };
   }
+
+  // Every reaction on this thread, in one query rather than one per message.
+  const reactions = reactionsFor(
+    db,
+    streamId,
+    rows.map((row) => row.external_id),
+  );
 
   const groups: MessageRow[][] = [];
   let current: MessageRow[] = [];
@@ -245,7 +304,7 @@ function segmentThread(
       continue;
     }
 
-    const transcript = transcriptFor(group);
+    const transcript = transcriptFor(group, reactions);
 
     if (transcript.trim().length === 0) {
       // Nothing but attachments or reactions. Still marked, so the pass does
