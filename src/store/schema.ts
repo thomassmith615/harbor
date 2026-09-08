@@ -1865,6 +1865,178 @@ export const MIGRATIONS: readonly string[] = [
   CREATE INDEX feedback_recent ON feedback (principal_id, created_at DESC);
   CREATE INDEX feedback_verdict ON feedback (principal_id, verdict);
   `,
+
+  // Latent events.
+  //
+  // The replacement for two competing representations. `threads` are connected
+  // components of the edge graph, which is single-linkage clustering and chains
+  // by construction; `stories` are frames plus gathered members, which does not
+  // chain but requires a seed artifact and judges membership by an additive
+  // score against hand-set thresholds. Measured against the coordination suite
+  // the first over-merges and the second over-splits, and a person sees both,
+  // so they get the worse half of each.
+  //
+  // What is modelled here instead is the thing both were approximating: a
+  // real-world occurrence that observations are evidence *about*. It has
+  // attributes that may be unknown, partially known, or contradicted, and an
+  // observation belongs to it when it helps explain that occurrence rather than
+  // when it resembles another observation.
+  `
+  CREATE TABLE events (
+    id            TEXT PRIMARY KEY,
+    principal_id  TEXT NOT NULL REFERENCES people (id),
+    kind          TEXT NOT NULL,
+    title         TEXT,
+    -- proposed: arranged but unconfirmed. confirmed: something authoritative
+    -- says it is happening. cancelled and superseded both stop it claiming new
+    -- observations, and are kept rather than deleted because the evidence that
+    -- ended it is part of its history.
+    status        TEXT NOT NULL
+                  CHECK (status IN ('proposed', 'confirmed', 'cancelled', 'superseded')),
+    -- The best current estimate, denormalised from the time slot so the common
+    -- query does not have to join. Null while genuinely unknown, which is a
+    -- state the old frame layer could not represent.
+    starts_at     INTEGER,
+    ends_at       INTEGER,
+    -- How wide the time estimate is. A vague evening and a booked table are
+    -- both events and only one of them knows when it is.
+    time_width_ms INTEGER,
+    confidence    REAL NOT NULL DEFAULT 0.5,
+    version       INTEGER NOT NULL,
+    created_at    INTEGER NOT NULL,
+    updated_at    INTEGER NOT NULL
+  );
+
+  CREATE INDEX events_when   ON events (principal_id, starts_at);
+  CREATE INDEX events_status ON events (principal_id, status);
+
+  -- What is known, or not known, about an event.
+  --
+  -- A slot is a claim with a state rather than a value with a confidence. The
+  -- difference matters at the edges this exists for: "we have not been told the
+  -- time" and "two sources disagree about the time" are different situations
+  -- requiring different behaviour, and a nullable column cannot tell them apart.
+  CREATE TABLE event_slots (
+    id           TEXT PRIMARY KEY,
+    event_id     TEXT NOT NULL REFERENCES events (id) ON DELETE CASCADE,
+    slot         TEXT NOT NULL,
+    value        TEXT NOT NULL,
+    display      TEXT NOT NULL,
+    -- Times are intervals. A slot filled by "later" is as real as one filled by
+    -- 8:00 PM and four hours wider, and collapsing it to an instant is the
+    -- thing that made vague language unusable.
+    lower        INTEGER,
+    upper        INTEGER,
+    confidence   REAL NOT NULL,
+    state        TEXT NOT NULL
+                 CHECK (state IN ('open', 'resolved', 'superseded', 'contradicted')),
+    -- Which observation put it there, and the words it came from.
+    source_kind  TEXT,
+    source_id    TEXT,
+    quote        TEXT,
+    observed_at  INTEGER NOT NULL,
+    created_at   INTEGER NOT NULL
+  );
+
+  CREATE INDEX event_slots_event ON event_slots (event_id, slot, state);
+  CREATE INDEX event_slots_value ON event_slots (slot, value);
+
+  -- Why an observation belongs, at the level of individual features.
+  --
+  -- The features column holds the named terms and their contributions to the
+  -- log-odds, not a total. That is what makes the decision reproducible and
+  -- what lets the same features be recalibrated from feedback later without
+  -- rewriting the extraction: the weights can change and the sentences
+  -- underneath stay true.
+  CREATE TABLE event_observations (
+    event_id     TEXT NOT NULL REFERENCES events (id) ON DELETE CASCADE,
+    node_kind    TEXT NOT NULL,
+    node_id      TEXT NOT NULL,
+    role         TEXT NOT NULL,
+    probability  REAL NOT NULL,
+    log_odds     REAL NOT NULL,
+    -- The runner-up's probability. An observation that fits two events almost
+    -- equally well has told you very little about which, and the margin is how
+    -- that is recorded rather than hidden.
+    margin       REAL NOT NULL DEFAULT 1,
+    features     TEXT NOT NULL,
+    evidence     TEXT NOT NULL,
+    created_at   INTEGER NOT NULL,
+    PRIMARY KEY (event_id, node_kind, node_id)
+  );
+
+  CREATE INDEX event_observations_node ON event_observations (node_kind, node_id);
+
+  -- Relations between events that are emphatically not membership.
+  --
+  -- Four weekly syncs are one pattern and four occurrences, and merging them is
+  -- the single most common way a similarity-based system goes wrong. Same for a
+  -- cancelled dinner and the replacement arranged twenty minutes later: they
+  -- are two events with a causal link, not one event with contradictory times.
+  CREATE TABLE event_links (
+    from_id     TEXT NOT NULL REFERENCES events (id) ON DELETE CASCADE,
+    to_id       TEXT NOT NULL REFERENCES events (id) ON DELETE CASCADE,
+    kind        TEXT NOT NULL
+                CHECK (kind IN ('recurrence_of', 'supersedes', 'cancels', 'part_of')),
+    evidence    TEXT NOT NULL,
+    created_at  INTEGER NOT NULL,
+    PRIMARY KEY (from_id, to_id, kind)
+  );
+
+  CREATE INDEX event_links_to ON event_links (to_id, kind);
+
+  -- The decision layer's parameters, kept out of the code.
+  --
+  -- Seeded with stated priors rather than fitted values, and the distinction is
+  -- honest: these are somebody's beliefs about how much each feature is worth,
+  -- written where they can be replaced by a fit over labelled examples without
+  -- touching a line of the extraction. The old system's hand-tuned sums were
+  -- the same beliefs, spread across twenty branches where they could not be
+  -- inspected together or changed at once.
+  CREATE TABLE model_weights (
+    model       TEXT NOT NULL,
+    feature     TEXT NOT NULL,
+    weight      REAL NOT NULL,
+    -- 'prior' when a person wrote it down, 'fitted' when it came from data.
+    origin      TEXT NOT NULL,
+    note        TEXT,
+    updated_at  INTEGER NOT NULL,
+    PRIMARY KEY (model, feature)
+  );
+  `,
+
+  // Text read out of images, and what it was judged to be.
+  //
+  // Cached with the engine and version that produced it, because OCR is the
+  // stage the whole photo cascade rests on being cheap and it is only cheap if
+  // it happens once per image ever. Pixels do not change; a re-read buys
+  // nothing unless the engine did.
+  //
+  // Separate from `items` rather than stored in the body, even though the body
+  // is where the text ends up. The item's body is the *document* text, which
+  // for two screenshots of one receipt is the stitched result, and losing the
+  // per-image reading would make the stitch unreproducible and unfixable.
+  `
+  CREATE TABLE photo_text (
+    item_id     TEXT PRIMARY KEY REFERENCES items (id) ON DELETE CASCADE,
+    engine      TEXT NOT NULL,
+    version     INTEGER NOT NULL,
+    text        TEXT NOT NULL,
+    -- receipt, booking, ticket, conversation, document, none.
+    kind        TEXT NOT NULL,
+    -- Why it was classified that way, as sentences. The gate on the expensive
+    -- stage has to be inspectable or it is just a cheaper black box.
+    signals     TEXT NOT NULL,
+    extracted   INTEGER NOT NULL DEFAULT 0,
+    -- The document this image belongs to, when several images are one document.
+    -- Null for the overwhelming majority.
+    document_id TEXT,
+    created_at  INTEGER NOT NULL
+  );
+
+  CREATE INDEX photo_text_kind     ON photo_text (kind, extracted);
+  CREATE INDEX photo_text_document ON photo_text (document_id);
+  `,
 ];
 
 /** The only principal that exists until household support lands. */

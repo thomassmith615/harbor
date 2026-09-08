@@ -197,6 +197,13 @@ import {
 import { search } from "../retrieval/search.js";
 import { feedbackSummary, recordFeedback, type Trace } from "../surfaces/feedback.js";
 import { runEval } from "../surfaces/evaluate.js";
+import { runSuite } from "../eval/run.js";
+import { report } from "../eval/coordination.js";
+import { SCENARIOS } from "../fixtures/scenarios.js";
+import { inferEvents } from "../events/infer.js";
+import { triagePhotos } from "../derive/photos.js";
+import { apply, examplesFromFeedback, fit, reset } from "../events/calibrate.js";
+import { liveEvents, observationsOf } from "../events/model.js";
 import type { Embedder } from "../derive/embed/index.js";
 import { DEFAULT_PRINCIPAL } from "../store/schema.js";
 import { nodeKey, parseNodeRef, summarize } from "../store/nodes.js";
@@ -2639,6 +2646,160 @@ async function main(): Promise<number> {
       } finally {
         db.close();
       }
+    });
+
+  dev
+    .command("photos")
+    .description("Read text out of images and work out which are documents")
+    .option("-n, --limit <count>", "how many images to read this run", "400")
+    .action((options: { limit?: string }) => {
+      const { db } = openDatabase();
+
+      try {
+        const report = triagePhotos(db, {
+          principalId: DEFAULT_PRINCIPAL,
+          ocrBudget: Number.parseInt(options.limit ?? "400", 10),
+          onNote: (note: string) => {
+            logger.print(`  ${note}`);
+          },
+        });
+
+        for (const [kind, count] of Object.entries(report.byKind).sort((a, b) => b[1] - a[1])) {
+          logger.print(`  ${kind.padEnd(14)} ${String(count)}`);
+        }
+
+        logger.print(
+          `${String(report.read)} read, ${String(report.stitched)} stitched into one document, ` +
+            `${String(report.duplicates)} duplicates folded, ` +
+            `${String(report.extractable)} worth a closer look`,
+        );
+
+        if (report.remaining > 0) {
+          logger.print(`${String(report.remaining)} still to read. Run it again.`);
+        }
+      } finally {
+        db.close();
+      }
+    });
+
+  dev
+    .command("calibrate")
+    .description("Fit the membership weights from recorded feedback")
+    .option("--apply", "write the fitted weights; without this it only reports")
+    .option("--reset", "put the stated priors back")
+    .action((options: { apply?: boolean; reset?: boolean }) => {
+      const { db } = openDatabase();
+
+      try {
+        if (options.reset === true) {
+          const removed = reset(db);
+
+          logger.print(`${String(removed)} weights cleared; the priors will be seeded again.`);
+          return;
+        }
+
+        const outcome = fit(examplesFromFeedback(db, DEFAULT_PRINCIPAL));
+
+        logger.print(
+          `${String(outcome.examples)} examples ` +
+            `(${String(outcome.fromFeedback)} from feedback, ` +
+            `${String(outcome.fromScenarios)} from scenarios), ` +
+            `accuracy ${outcome.accuracy.toFixed(3)}`,
+        );
+
+        if (outcome.refused !== null) {
+          logger.print(`Not fitting: ${outcome.refused}`);
+          return;
+        }
+
+        for (const move of outcome.moved) {
+          logger.print(`  ${move.feature}: ${move.from.toFixed(2)} -> ${move.to.toFixed(2)}`);
+        }
+
+        if (options.apply === true) {
+          apply(db, outcome.weights);
+          logger.print("Written. Run `harbor dev coordination` before trusting it.");
+        } else {
+          logger.print("Nothing written. Pass --apply to keep these.");
+        }
+      } finally {
+        db.close();
+      }
+    });
+
+  dev
+    .command("events")
+    .description("Infer latent events from every observation and show them")
+    .option("--rebuild", "throw the events away and infer them again")
+    .action((options: { rebuild?: boolean }) => {
+      const { db } = openDatabase();
+
+      try {
+        void options;
+
+        const report = inferEvents(db, {
+          principalId: DEFAULT_PRINCIPAL,
+          timezone: timezone(),
+          onNote: (note: string) => {
+            logger.print(`  ${note}`);
+          },
+        });
+
+        logger.print(
+          `${String(report.events)} events, ${String(report.attached)} observations attached, ` +
+            `${String(report.contested)} contested, ${String(report.recurrences)} recurrences, ` +
+            `${String(report.cancelled)} cancelled`,
+        );
+
+        for (const event of liveEvents(db, DEFAULT_PRINCIPAL)) {
+          const when =
+            event.startsAt === null
+              ? "sometime"
+              : new Date(event.startsAt).toLocaleString("en-US", { timeZone: timezone() });
+
+          logger.print("");
+          logger.print(`${event.status}  ${event.title ?? "(untitled)"}  ${when}`);
+
+          for (const observation of observationsOf(db, event.id)) {
+            logger.print(
+              `  [${observation.role}] p=${observation.probability.toFixed(2)} ` +
+                `margin=${observation.margin.toFixed(2)}`,
+            );
+
+            for (const line of observation.evidence) {
+              logger.print(`      ${line}`);
+            }
+          }
+        }
+      } finally {
+        db.close();
+      }
+    });
+
+  dev
+    .command("coordination")
+    .description("Score event inference against the adversarial scenarios")
+    .option("--model <which>", "events | stories | situations | both", "events")
+    .action(async (options: { model?: string }) => {
+      const model = options.model === undefined ? "events" : options.model;
+
+      if (
+        model !== "stories" &&
+        model !== "situations" &&
+        model !== "both" &&
+        model !== "events"
+      ) {
+        logger.print("Use events, stories, situations or both.");
+        process.exitCode = 1;
+        return;
+      }
+
+      // No store is opened. Every scenario gets its own, because sharing one
+      // would let the noise and term indexes see traffic from other scenarios
+      // and make each result depend on the order of the suite.
+      const summary = await runSuite(SCENARIOS, { model });
+
+      logger.print(report(summary));
     });
 
   dev

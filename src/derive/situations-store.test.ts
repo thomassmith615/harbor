@@ -10,6 +10,7 @@
  */
 import { strict as assert } from "node:assert";
 import { after, before, describe, test } from "node:test";
+import { buildThreads } from "./threads.js";
 import { relate } from "./relate.js";
 import { derive } from "./pipeline.js";
 import { resolveEntities } from "./entities.js";
@@ -27,6 +28,14 @@ let store: TestStore;
 
 function rerun(): void {
   relate(store.db, { principalId: PRINCIPAL, timezone: "America/New_York" });
+
+  // Built explicitly, because `relate` no longer builds situations: connected
+  // components of the edge graph are single-linkage clustering and the pass was
+  // retired in favour of `events/infer.ts`. What this file tests is the store
+  // underneath -- that a situation keeps its identity across a rebuild rather
+  // than being a fingerprint of its contents -- and that behaviour is worth
+  // keeping tested for as long as the tables exist.
+  buildThreads(store.db, PRINCIPAL);
 }
 
 before(async () => {

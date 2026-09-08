@@ -46,7 +46,6 @@ import {
 import { countReferences, referencesFor } from "../store/references.js";
 import { entitiesOfNode, nodeKey, NodeResolver } from "../store/nodes.js";
 import { selfEntity } from "../store/entities.js";
-import { buildThreads } from "./threads.js";
 import type { DB } from "../kernel/db.js";
 import type { GraphNode, NodeRef } from "../store/nodes.js";
 import type { LinkerContext, StoredAnchor } from "./linkers.js";
@@ -379,16 +378,29 @@ export function relate(db: DB, options: RelateOptions): RelateReport {
     options.onProgress?.(examined, total);
   }
 
-  // Situations are rebuilt whole rather than incrementally. A new edge can merge
-  // two existing components, so there is no correct partial update, and the
-  // rebuild reads edges rather than items. Ids are derived from membership, so a
-  // rebuild that finds the same situation gives it the same id and anything
-  // referring to it survives.
-  const threads = buildThreads(db, options.principalId, noise);
-
-  if (threads.threads > 0) {
-    options.onNote?.(`${String(threads.threads)} situations spanning more than one source`);
-  }
+  // Situations are no longer built.
+  //
+  // `buildThreads` took connected components of the edge graph, which is
+  // single-linkage clustering: membership was transitive, so A relating to B
+  // and B to C made A and C one occurrence whether or not they had anything to
+  // do with each other. The guards it grew -- a size cap, a spine-kind rule, a
+  // breadth requirement -- were each a symptom being treated, and the header of
+  // `gather.ts` has carried the argument against the whole approach since the
+  // story layer was written.
+  //
+  // Measured on the coordination suite it over-merged twenty-two pairs, and a
+  // person was shown it *alongside* stories, so the two inconsistent answers
+  // combined to over-merge thirty. `events/infer.ts` replaces both and
+  // over-merges none.
+  //
+  // The edges themselves stay. They are pairwise claims with evidence attached
+  // and they were never the problem; what was wrong was treating their
+  // transitive closure as the definition of an event. `harbor why` still reads
+  // them, and the event layer's candidate generation is better for their
+  // existing. The `threads` tables are left in place rather than dropped, so a
+  // store that has them keeps them readable until the surfaces that mention
+  // situations have been moved over.
+  const threads = { threads: 0, components: 0, crossSource: 0, carried: 0, changed: 0, created: 0, merged: 0, retired: 0, keptForState: 0 };
 
   return {
     nodesExamined: examined,

@@ -12,6 +12,7 @@ import { appleCalendarConnector } from "./apple/calendar.js";
 import { appleContactsConnector } from "./apple/contacts.js";
 import { appleRemindersConnector } from "./apple/reminders.js";
 import { imessageConnector } from "./imessage/messages.js";
+import { photosConnector } from "./photos/index.js";
 import { imapConnector } from "./imap/mail.js";
 import type { SourceConnector } from "./types.js";
 
@@ -23,6 +24,7 @@ export const CONNECTORS: readonly SourceConnector[] = [
   appleRemindersConnector,
   imessageConnector,
   imapConnector,
+  photosConnector,
 ];
 
 /** Source types Harbor can authenticate. */

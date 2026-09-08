@@ -67,7 +67,7 @@ const APPROXIMATE_SLACK_MS = 45 * MINUTE;
 const LATEST_HOUR = 26;
 
 /** Nothing arranged in conversation is more than this far out. */
-const MAX_HORIZON_MS = 36 * HOUR;
+const MAX_HORIZON_MS = 8 * 24 * HOUR;
 
 interface Window {
   readonly fromHour: number;
@@ -96,6 +96,37 @@ const VAGUE: readonly { readonly pattern: RegExp; readonly window: Window; reado
 ];
 
 /**
+ * A named day, with or without a part of it.
+ *
+ * "saturday morning" is how a large share of plans are arranged and `datesIn`
+ * cannot read it: that reads dates, and a weekday is not a date until you know
+ * which week is meant. The rule here is the next occurrence, which is what a
+ * person means unless they say otherwise, and it is dropped entirely beyond the
+ * horizon so a stray weekday in prose cannot invent a plan.
+ */
+const WEEKDAYS = [
+  "sunday",
+  "monday",
+  "tuesday",
+  "wednesday",
+  "thursday",
+  "friday",
+  "saturday",
+] as const;
+
+const PART_OF_DAY: Readonly<Record<string, { fromHour: number; toHour: number }>> = {
+  morning: { fromHour: 8, toHour: 12 },
+  afternoon: { fromHour: 12, toHour: 17 },
+  evening: { fromHour: 17, toHour: 22 },
+  night: { fromHour: 19, toHour: LATEST_HOUR },
+};
+
+const WEEKDAY_PATTERN = new RegExp(
+  `\\b(?:this|next|on)?\\s*(${WEEKDAYS.join("|")})(?:\\s+(morning|afternoon|evening|night))?\\b`,
+  "i",
+);
+
+/**
  * "later", which is the one that has to be measured from the speaker.
  *
  * Every other vague form names a part of the day and can be resolved against
@@ -121,6 +152,15 @@ const CLOCK_MERIDIEM = /\b(\d{1,2})(?::(\d{2}))?\s*([ap])\.?m\.?\b/gi;
 const CLOCK_ISH = /\b(\d{1,2})(?::(\d{2}))?\s*(?:ish|-ish)\b/gi;
 const CLOCK_PREPOSED = /\b(?:at|around|by|from)\s+(\d{1,2})(?::(\d{2}))\b/gi;
 const CLOCK_PREPOSED_HOUR = /\b(?:at|around|by)\s+(\d{1,2})(?!\s*(?:%|st|nd|rd|th|:|\d))\b/gi;
+
+/** The local hour and minute of an instant, for re-placing it on another day. */
+function hourOf(at: number, tz: string): number {
+  return localHour(at, tz);
+}
+
+function minuteOf(at: number, tz: string): number {
+  return Number.parseInt(localIso(at, tz).slice(14, 16), 10);
+}
 
 function startOfLocalDay(at: number, tz: string, dayOffset: number): number {
   const base = localTimeToInstant(localDate(at, tz), 0, 0, tz);
@@ -174,13 +214,44 @@ function nextOccurrence(said: number, tz: string, hour: number, minute: number):
  * wins, which turns out to be what "half seven" and "at 9" mean in almost every
  * message anybody sends.
  */
-function resolveAmbiguousHour(said: number, tz: string, hour: number, minute: number): number {
+/**
+ * Words elsewhere in the same message that say which half of the day.
+ *
+ * "at 8 tonight" is eight in the evening and the "8" does not know that. Read
+ * on its own it resolves to whichever eight o'clock comes next, and at ten in
+ * the morning that is eight in the morning, two hours in the past under the
+ * grace rule. The event then sits twelve hours from where it belongs and
+ * nothing downstream can recover, because by then it is a number.
+ */
+const EVENING = /\b(?:tonight|this evening|after work|dinner|drinks|evening)\b/i;
+const MORNING = /\b(?:this morning|breakfast|before work|morning)\b/i;
+
+function resolveAmbiguousHour(
+  said: number,
+  tz: string,
+  hour: number,
+  minute: number,
+  context = "",
+): number {
   if (hour === 0 || hour > 12) {
     return nextOccurrence(said, tz, hour % 24, minute);
   }
 
   const morning = nextOccurrence(said, tz, hour, minute);
   const evening = nextOccurrence(said, tz, (hour + 12) % 24, minute);
+
+  // Context first, "soonest" only when there is none. An hour between one and
+  // eleven with "tonight" in the same message is the afternoon reading, whether
+  // or not the morning one comes sooner.
+  if (hour >= 1 && hour <= 11) {
+    if (EVENING.test(context) && !MORNING.test(context)) {
+      return nextOccurrence(said, tz, hour + 12, minute);
+    }
+
+    if (MORNING.test(context) && !EVENING.test(context)) {
+      return morning;
+    }
+  }
 
   return Math.min(morning, evening);
 }
@@ -234,6 +305,31 @@ export function timeHintsIn(text: string, saidAt: number, tz: string): readonly 
     }
   };
 
+  // A named day in the same text, resolved once.
+  //
+  // "dinner Thursday at 8" said on a Tuesday is Thursday at eight, and reading
+  // the clock on its own gives Tuesday: `nextOccurrence` has no idea a day was
+  // named. So the weekday is found first and the clock is placed on it, which
+  // is both more correct and the reason a text carrying both produces one hint
+  // rather than two claims about different days.
+  const named = WEEKDAY_PATTERN.exec(text);
+
+  const namedOffset = ((): number | null => {
+    if (named === null) {
+      return null;
+    }
+
+    const wanted = WEEKDAYS.indexOf((named[1] ?? "").toLowerCase() as (typeof WEEKDAYS)[number]);
+
+    if (wanted < 0) {
+      return null;
+    }
+
+    const todayIndex = new Date(Date.parse(`${localDate(saidAt, tz)}T12:00:00Z`)).getUTCDay();
+
+    return (wanted - todayIndex + 7) % 7;
+  })();
+
   const clock = (
     match: RegExpMatchArray,
     hour: number,
@@ -246,9 +342,12 @@ export function timeHintsIn(text: string, saidAt: number, tz: string): readonly 
       return;
     }
 
-    const at = ambiguous
-      ? resolveAmbiguousHour(saidAt, tz, hour, minute)
+    const resolved = ambiguous
+      ? resolveAmbiguousHour(saidAt, tz, hour, minute, text)
       : nextOccurrence(saidAt, tz, hour, minute);
+
+    const at =
+      namedOffset === null ? resolved : atLocalHour(saidAt, tz, namedOffset, hourOf(resolved, tz), minuteOf(resolved, tz));
 
     put({
       value: intervalValue(at - slack, at + slack),
@@ -335,6 +434,33 @@ export function timeHintsIn(text: string, saidAt: number, tz: string): readonly 
       kind: "vague",
       confidence,
     });
+  }
+
+  // The weekday on its own, only when no clock was found.
+  //
+  // With a clock present the day has already been folded into it above, and
+  // emitting a second hint spanning the whole of that day would be a wider,
+  // weaker claim about the same statement.
+  if (named !== null && namedOffset !== null && found.size === 0) {
+    const part = PART_OF_DAY[(named[2] ?? "").toLowerCase()];
+
+    {
+      const from = atLocalHour(saidAt, tz, namedOffset, part?.fromHour ?? 8);
+      const to = atLocalHour(saidAt, tz, namedOffset, part?.toHour ?? 22);
+
+      if (to > saidAt) {
+        put({
+          value: intervalValue(Math.max(from, saidAt), to),
+          display: named[0].trim(),
+          startsAt: Math.max(from, saidAt),
+          endsAt: to,
+          kind: "vague",
+          // A named day with a part of it is a real arrangement; a bare weekday
+          // is often somebody talking about a day rather than proposing one.
+          confidence: part === undefined ? 0.5 : 0.7,
+        });
+      }
+    }
   }
 
   const later = LATER.exec(text);

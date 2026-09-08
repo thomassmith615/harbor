@@ -610,6 +610,135 @@ because two runs produce two different sentences and comparing them would measur
 a model's phrasing. And a thumbs-down case is never reported as fixed, only as
 changed, because nothing available here would justify the stronger claim.
 
+## Photos
+
+A photo library is tens of thousands of images and sending them to a vision
+model is the obvious way to understand them and is not affordable, not once and
+certainly not on every sync. So no image is ever sent anywhere, and nothing
+reads pixels except an on-device text recogniser running against the file in
+place. Harbor learns what a picture *says*, never what it depicts.
+
+The cascade, and what each stage costs:
+
+1. **Metadata**, free. When it was taken, whether it is a screenshot, where.
+2. **OCR**, on-device, about a tenth of a second per image, once per image ever.
+   macOS Vision where the toolchain is present, tesseract if it is on PATH,
+   nothing otherwise -- in which case photos still arrive with their metadata and
+   simply have no contents.
+3. **Classification**, free, from keyword rules over the text. A photograph of a
+   dog produces no text and stops here, which is most of a library.
+4. **Stitching**, free.
+5. **Extraction**, a model call, on what is left. Roughly one image in a
+   hundred, with its own budget separate from the OCR budget, because it is the
+   only stage that costs money and a bound is the last defence if the classifier
+   is wrong about a whole category of image.
+
+The property worth protecting is that the expensive stage is gated by stages
+that can be read and argued with. When a photograph of a menu gets a model call,
+the reason is a line in `classify.ts`.
+
+**Two screenshots of one receipt.** A receipt is longer than a screen, so people
+capture the top and then the bottom and the halves overlap. Treating them as two
+documents counts the total twice. The join is found by sequence overlap on
+lines: the largest N where the last N lines of one are the first N of the other.
+
+Stitching follows the *capture sequence*, not similarity. Three receipts from
+the same shop share the header, the address and the layout, and clustering on
+overlap fuses them; what separates two halves of one receipt from two receipts
+is that they were captured seconds apart as one act. Only the first capture
+carries the stitched text, so the total is indexed once.
+
+**A receipt photographed and the same receipt mailed.** Not a photo problem. The
+document's text becomes the item body, so the order number becomes a reference
+anchor like any other, and the event layer merges two observations sharing a
+reference because that is what it already does. `purchaseKey` is the fallback for
+paper receipts carrying no order number: merchant, amount and day.
+
+**A screenshot of a conversation** is recognised and deliberately never
+extracted from. Harbor has the person's own conversations already, and treating a
+picture of somebody else's as theirs would put words in their mouth in a store
+whose whole discipline is that claims can be checked.
+
+## Events
+
+The thing two earlier layers were both approximating without naming.
+
+`threads` took connected components of the relationship graph. Membership was
+transitive, so a node joined by resembling *some other member* rather than by
+having anything to do with the occurrence, and single-linkage clustering chains.
+`stories` fixed the transitivity by scoring candidates against a frame's own
+anchors, which was right, and left three things unsolved: a frame needs a seed
+artifact, membership was an additive score against hand-set thresholds that
+could not express evidence *against*, and a frame's attributes were fixed at
+detection so nothing could be learned about it afterwards.
+
+Measured on the coordination suite, the first over-merges, the second
+over-splits, and a person sees both, so they get the worse half of each. The
+union over-merges more than either half alone.
+
+**An event is a hypothesis about the world.** It has slots (time, place,
+people, activity, references) that may be open, resolved, superseded or
+contradicted, and observations attach because they help explain *this
+occurrence*. Times are intervals throughout: a slot filled by "later" is a real
+claim four hours wide, and collapsing it to an instant is what made vague
+language unusable.
+
+**Membership is a probability, not a sum of points.** The same named features
+with the same sentences, combined in log-odds with weights kept in a table.
+Three things follow. Negative weights are ordinary, so one contradiction defeats
+several weak similarities without a special case. The output means something and
+can be checked against feedback. And the weights are data: fitting them from
+labelled examples is logistic regression over the stored feature vectors with no
+change to any extraction code.
+
+**Hypotheses compete.** An observation goes to the best event, and only if the
+best is clearly better than the second. Below the margin it attaches to nothing
+and the margin is recorded, because an observation that fits two evenings
+equally well is evidence about neither, and attaching it to both is exactly how
+a shared person fuses two unrelated evenings.
+
+**Some things are linked, never merged.** Four weekly syncs are one pattern and
+four occurrences. Two dinners at the same restaurant a fortnight apart are two
+dinners, and every similarity measure says otherwise because every feature they
+have agrees. A cancelled event is closed to further evidence, so the replacement
+arranged twenty minutes later at the same restaurant is its own event.
+
+Scored against thirteen adversarial scenarios (`harbor dev coordination`),
+weighting a false merge at four times a cautious split:
+
+```
+                  over-merged   over-split   missed   mean f1   cost
+stories                   22           33       11     0.486     121
+situations                22           29        8     0.605     117
+both (what was shown)     30           17        6     0.666     137
+events                     0           13        2     0.885      13
+```
+
+The remaining failures are all splits, which is the intended trade: a thin
+answer is visible and a confident fusion is not.
+
+**Situations are retired.** `relate` no longer builds connected components. The
+edges stay: they are pairwise claims with evidence attached and they were never
+the problem, and the event layer is better for their existing. What was wrong was
+treating their transitive closure as the definition of an event. `threads` and
+its store are left in place so an existing database stays readable, and nothing
+writes to them.
+
+**Weights can be fitted.** `harbor dev calibrate` runs a regularised logistic
+regression over the stored feature vectors and reports what would move before
+writing anything. Two guards. Weights are pulled toward their priors rather than
+toward zero, because at forty examples the prior is usually the better estimate
+and an unregularised fit will send a weight to infinity on the strength of one
+row. And a fit is refused when the only labels available are the coordination
+scenarios, since fitting to the test set produces a build that scores well on
+the only thing measuring it.
+
+One seam is open and named in the code: `feedback` records a question and an
+answer, not which events the answer was built from, so `examplesFromFeedback`
+returns nothing until an answer records the events it used. Writing a
+plausible-looking join instead would produce a great many labelled examples and
+every one of them would be noise.
+
 ## The graph
 
 An edge joins two **nodes**, and a node is an item or an episode. That

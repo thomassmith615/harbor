@@ -20,6 +20,8 @@ import { refinePlans } from "../derive/refine-plans.js";
 import { resolvePlaces } from "../derive/venues.js";
 import { extractAttributes, promoteIdentifiers } from "../derive/attributes.js";
 import { proposePropositions } from "../derive/propositions.js";
+import { inferEvents } from "../events/infer.js";
+import { triagePhotos } from "../derive/photos.js";
 import { nameStories } from "../derive/name-stories.js";
 import { buildCommitments } from "../derive/commitments.js";
 import { extractPurchases } from "../derive/extract.js";
@@ -66,6 +68,14 @@ export const JOB_TASKS = [
   // yet been taught what the story layer worked out.
   "stories",
   "relate",
+  // Reading text out of images. On-device, budgeted, and its own task because
+  // a first pass over a whole photo library is an hour of CPU that should be
+  // resumable rather than something a sync waits on.
+  "photos",
+  // Latent events. After relate because the edges are useful candidate
+  // evidence, and after stories because the plan layer's resolutions are
+  // written back as anchors that event inference reads.
+  "events",
   "name-stories",
   "commit",
   "extract",
@@ -147,6 +157,8 @@ const DECLARED: Readonly<Record<JobTask, readonly JobTask[]>> = {
   // underneath it.
   attributes: ["onboard", "pulse", "sync", "recent", "backfill", "resolve", "attributes"],
   propositions: ["onboard", "pulse", "derive", "propositions"],
+  photos: ["onboard", "pulse", "sync", "recent", "backfill", "photos"],
+  events: ["onboard", "pulse", "sync", "recent", "backfill", "resolve", "stories", "events"],
   stories: [
     "onboard",
     "pulse",
@@ -708,6 +720,37 @@ async function run(db: DB, jobId: string, task: JobTask, context: JobContext): P
     return (
       `${String(outcome.written)} messages rewritten to stand alone ` +
       `from ${String(outcome.read)} conversations, ${String(outcome.failed)} could not be read`
+    );
+  }
+
+  if (task === "photos") {
+    const outcome = triagePhotos(db, {
+      principalId: context.principalId,
+      onNote: (note) => {
+        report(db, jobId, { note });
+      },
+    });
+
+    return (
+      `${String(outcome.read)} images read (${String(outcome.withText)} had text), ` +
+      `${String(outcome.stitched)} stitched, ${String(outcome.duplicates)} duplicates, ` +
+      `${String(outcome.extractable)} worth a closer look, ${String(outcome.remaining)} to go`
+    );
+  }
+
+  if (task === "events") {
+    const outcome = inferEvents(db, {
+      principalId: context.principalId,
+      timezone: context.timezone,
+      onNote: (note) => {
+        report(db, jobId, { note });
+      },
+    });
+
+    return (
+      `${String(outcome.events)} events, ${String(outcome.attached)} observations attached, ` +
+      `${String(outcome.contested)} too ambiguous to place, ` +
+      `${String(outcome.recurrences)} recurrences, ${String(outcome.cancelled)} cancelled`
     );
   }
 

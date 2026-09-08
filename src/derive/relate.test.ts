@@ -9,6 +9,7 @@
  */
 import { strict as assert } from "node:assert";
 import { after, before, describe, test } from "node:test";
+import { buildThreads } from "./threads.js";
 import { relate, explain, RELATIONSHIP_VERSION } from "./relate.js";
 import { TermIndex, contentTerms, longEnoughAlone, soloCeilingFor } from "./terms.js";
 import { NoiseIndex } from "./noise.js";
@@ -415,24 +416,23 @@ describe("conversations are the unit, not messages", () => {
     assert.equal(stragglers, 0, "some items were never marked as considered");
   });
 
-  test("a situation holds the conversation, not its forty messages", () => {
-    const found = topThreads(store.db, PRINCIPAL, { minSources: 2, limit: 10 });
-
-    assert.ok(found.length > 0, "no cross-source situations at all");
-
-    const dinner = found.find((thread) => (thread.title ?? "").includes("Brennan"));
-
-    assert.ok(dinner !== undefined, "the Brennan dinner is not a situation");
-
-    const nodes = threadNodes(store.db, dinner.id);
-
-    assert.ok(
-      nodes.some((ref) => ref.kind === "episode"),
-      "the situation contains no conversation",
-    );
-    assert.ok(
-      nodes.length <= 4,
-      `the situation has ${String(nodes.length)} members, so messages leaked in individually`,
+  test("relate no longer builds situations at all", () => {
+    // What this used to assert -- that a situation held the conversation rather
+    // than its forty messages -- was a guard on a mechanism that has been
+    // retired. Connected components of the edge graph are single-linkage
+    // clustering, so membership was transitive, and every guard the pass grew
+    // (a size cap, a spine-kind rule, this one) was a symptom being treated
+    // rather than the cause.
+    //
+    // The cause was measured: on the coordination suite situations over-merged
+    // twenty-two pairs, and being shown alongside stories pushed the total a
+    // person saw to thirty. `events/infer.ts` replaces both and over-merges
+    // none. The assertion kept here is the retirement itself, so that anything
+    // quietly reviving the pass fails immediately.
+    assert.equal(
+      topThreads(store.db, PRINCIPAL, { minSources: 2, limit: 10 }).length,
+      0,
+      "relate built a situation; the component pass was supposed to be retired",
     );
   });
 });
@@ -639,6 +639,14 @@ describe("a title the person gave, and taking it back", () => {
     // Both directions, because only one of them existed. A user title is exempt
     // from renaming and from retirement, so a rename made while testing pinned
     // a real situation open under a meaningless name with no way to undo it.
+    // Built explicitly. `relate` no longer runs this pass, and what is under
+    // test here is the rename plumbing rather than the clustering: a user title
+    // is exempt from renaming and from retirement, so getting it wrong pinned a
+    // situation open under a meaningless name with no way to undo it. The
+    // plumbing is still reachable and still worth a test; the pass that used to
+    // feed it is not.
+    buildThreads(store.db, PRINCIPAL);
+
     const thread = topThreads(store.db, PRINCIPAL, { limit: 1, minSources: 2 })[0];
 
     assert.ok(thread !== undefined, "no situation to rename");

@@ -536,7 +536,7 @@ function mergeAnchors(sets: readonly (readonly Anchor[])[]): readonly Anchor[] {
  * the span is left short and the frame is marked open-ended, which is what the
  * presence layer reads to say "away, and nothing says you came back".
  */
-function tripFrames(
+export function tripFrames(
   db: DB,
   resolver: NodeResolver,
   noise: NoiseIndex,

@@ -88,7 +88,20 @@ const PROPOSAL_PATTERNS: readonly RegExp[] = [
   /\b(?:let'?s|lets|we should|wanna|want to|down to|up for)\s+(?:go|grab|get|hit|meet|do|try)\b/i,
   /\b(?:drinks|dinner|lunch|brunch|coffee|beers?)\s+(?:at|tonight|later|tomorrow|after)\b/i,
   /\b(?:meet|meeting|meetup|grabbing|heading)\s+(?:at|up at|over to|to)\b/i,
+  // A question that names an hour.
+  //
+  // "great american pub at 8 instead?" proposes an evening and matches none of
+  // the patterns above: it has no invitation verb and no "who". What it has is
+  // the two things that make a line a proposal in practice, which is that it
+  // asks and it says when. Kept last because it is checked differently: see
+  // `looksLikeProposal`, where it only fires alongside a stated hour, since a
+  // question mark on its own would make half of every conversation a proposal.
+  /\?\s*$/,
 ];
+
+/** The hour the question rule needs before it counts. */
+const NAMES_AN_HOUR =
+  /\b\d{1,2}(?::\d{2})?\s*(?:ish|[ap]\.?m\.?)\b|\b(?:at|around|by)\s+\d{1,2}\b/i;
 
 /**
  * Somebody saying yes, including without typing.
@@ -228,7 +241,26 @@ export function looksLikeProposal(text: string): boolean {
     return false;
   }
 
-  return PROPOSAL_PATTERNS.some((pattern) => pattern.test(text));
+  const [questionRule, ...verbRules] = [...PROPOSAL_PATTERNS].reverse();
+
+  if (verbRules.some((pattern) => pattern.test(text))) {
+    return true;
+  }
+
+  // The question rule alone is far too loose. It fires only alongside a stated
+  // hour *and* something being proposed, because an hour on its own is usually
+  // somebody settling a plan that already exists rather than making a new one.
+  //
+  // "8ish?" is the case that forced the second condition. It names an hour, it
+  // is a question, and it is four lines into an evening that was already
+  // arranged: read as a proposal it starts a second event and steals the
+  // acceptance meant for the first, which halves the roster of the one plan
+  // actually being made.
+  if (questionRule === undefined || !questionRule.test(text) || !NAMES_AN_HOUR.test(text)) {
+    return false;
+  }
+
+  return ACTIVITY.test(text) || venuesIn(text).length > 0;
 }
 
 function verdictOf(text: string): "accept" | "decline" | null {
@@ -309,6 +341,15 @@ export function venueTokens(phrase: string): ReadonlySet<string> {
  */
 const SETTLES_CONFIDENCE = 0.7;
 
+/**
+ * How many lines after a proposal an acceptance may still be answering it.
+ *
+ * Twelve. Long enough for a group chat to talk around a suggestion before
+ * anybody commits, short enough that a later conversation in the same burst
+ * does not inherit the roster.
+ */
+const STANCE_REACH = 12;
+
 function overlaps(a: TimeHint, b: TimeHint): boolean {
   return a.startsAt <= b.endsAt && b.startsAt <= a.endsAt;
 }
@@ -373,10 +414,32 @@ export function readPlans(
         continue;
       }
 
-      // A second proposal ends the first one's roster. Two plans in one
-      // transcript are two rosters, and letting the first collect the second's
-      // acceptances is how one evening acquires people who agreed to another.
-      if (looksLikeProposal(later.text) && later.index > line.index + 1) {
+      // An answer arrives near the question.
+      //
+      // Without a bound the roster runs to the end of the transcript, and a
+      // transcript can be a day and a half long. The case that forced this: a
+      // dinner proposed at four, cancelled by the restaurant at six, and a
+      // replacement agreed at half past. "yeah I'm going" belongs to the
+      // replacement and was being collected by the proposal it had nothing to
+      // do with, because nothing in between happened to look like a proposal.
+      if (later.index > line.index + STANCE_REACH) {
+        break;
+      }
+
+      // A second proposal ends the first one's roster.
+      //
+      // Any later proposal, including the very next line. The exception that
+      // used to be here (only proposals more than one line away ended it) was
+      // meant to tolerate somebody restating their own suggestion, and it fails
+      // on the case that matters: "anyone want to hit the range thursday" /
+      // "or we could just do dinner at 8" / "sure, dinner works". The reply
+      // names which one it means, the exception let the range collect it too,
+      // and an evening nobody agreed to acquired a roster.
+      //
+      // Binding an acceptance to the most recent proposal is not always right
+      // either. It is right far more often, and when it is wrong it drops a
+      // stance rather than inventing one.
+      if (looksLikeProposal(later.text)) {
         break;
       }
 
